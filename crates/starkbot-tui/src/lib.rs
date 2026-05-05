@@ -116,9 +116,8 @@ pub struct TuiState {
     pub selected_model: usize,
     // Approval prompt state
     pub pending_approval: Option<PendingApproval>,
-    // Chat scroll state
-    pub chat_scroll: u16,
-    pub chat_scroll_pinned_bottom: bool, // auto-scroll to bottom on new messages
+    // Chat scroll: offset from bottom (0 = pinned to bottom, higher = scrolled up)
+    pub chat_scroll_up: u16,
 }
 
 /// A pending tool approval being shown in the TUI.
@@ -165,8 +164,7 @@ impl TuiState {
             available_models,
             selected_model,
             pending_approval: None,
-            chat_scroll: 0,
-            chat_scroll_pinned_bottom: true,
+            chat_scroll_up: 0,
         }
     }
 
@@ -175,10 +173,8 @@ impl TuiState {
             role: role.to_string(),
             content: content.to_string(),
         });
-        // Auto-scroll to bottom on new messages if pinned
-        if self.chat_scroll_pinned_bottom {
-            self.chat_scroll = u16::MAX; // will be clamped in draw
-        }
+        // If pinned to bottom (offset 0), stay there.
+        // If scrolled up, stay where you are (don't jump).
     }
 
     pub fn add_tool_activity(&mut self, activity: &str) {
@@ -232,24 +228,19 @@ fn handle_chat_key(state: &mut TuiState, key: KeyEvent) -> Option<String> {
     match key.code {
         KeyCode::Tab => { state.active_view = state.active_view.next(); None }
         KeyCode::PageUp => {
-            state.chat_scroll = state.chat_scroll.saturating_sub(10);
-            state.chat_scroll_pinned_bottom = false;
+            state.chat_scroll_up = state.chat_scroll_up.saturating_add(10);
             None
         }
         KeyCode::PageDown => {
-            state.chat_scroll = state.chat_scroll.saturating_add(10);
-            // Will be clamped in draw; if at max, re-pin
-            state.chat_scroll_pinned_bottom = true;
+            state.chat_scroll_up = state.chat_scroll_up.saturating_sub(10);
             None
         }
         KeyCode::Up if state.agent_busy || state.input.is_empty() => {
-            state.chat_scroll = state.chat_scroll.saturating_sub(1);
-            state.chat_scroll_pinned_bottom = false;
+            state.chat_scroll_up = state.chat_scroll_up.saturating_add(1);
             None
         }
         KeyCode::Down if state.agent_busy || state.input.is_empty() => {
-            state.chat_scroll = state.chat_scroll.saturating_add(1);
-            state.chat_scroll_pinned_bottom = true;
+            state.chat_scroll_up = state.chat_scroll_up.saturating_sub(1);
             None
         }
         KeyCode::Enter => {
@@ -257,7 +248,7 @@ fn handle_chat_key(state: &mut TuiState, key: KeyEvent) -> Option<String> {
             let input = state.input.clone();
             state.input.clear();
             state.input_cursor = 0;
-            state.chat_scroll_pinned_bottom = true;
+            state.chat_scroll_up = 0; // snap to bottom on send
             Some(input)
         }
         KeyCode::Char(c) => {
@@ -624,14 +615,17 @@ fn draw_chat(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
     }
 
     let max_scroll = wrapped_total.saturating_sub(visible_height) as u16;
-    let scroll_offset = if state.chat_scroll_pinned_bottom || state.chat_scroll >= max_scroll {
-        max_scroll
-    } else {
-        state.chat_scroll.min(max_scroll)
-    };
+    // scroll_up=0 means at bottom (max_scroll), higher means further up
+    let clamped_up = state.chat_scroll_up.min(max_scroll);
+    let scroll_offset = max_scroll.saturating_sub(clamped_up);
 
+    let scroll_indicator = if clamped_up > 0 {
+        format!(" Messages [↑{}] ", clamped_up)
+    } else {
+        " Messages ".to_string()
+    };
     let messages = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).title(" Messages "))
+        .block(Block::default().borders(Borders::ALL).title(scroll_indicator))
         .wrap(Wrap { trim: false })
         .scroll((scroll_offset, 0));
     frame.render_widget(messages, chunks[0]);
