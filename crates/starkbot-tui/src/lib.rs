@@ -438,8 +438,9 @@ fn draw_chat(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
         ])
         .split(area);
 
-    // Messages
+    // Messages — render multi-line content with basic markdown styling
     let mut lines: Vec<Line> = vec![];
+    let mut total_lines: usize = 0;
     for msg in &state.messages {
         let (prefix, color) = match msg.role.as_str() {
             "user" => ("[you]", Color::Green),
@@ -448,15 +449,59 @@ fn draw_chat(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
             "error" => ("[error]", Color::Red),
             _ => ("[?]", Color::Gray),
         };
-        lines.push(Line::from(vec![
-            Span::styled(format!("{} ", prefix), Style::default().fg(color).bold()),
-            Span::raw(&msg.content),
-        ]));
+
+        let content_lines: Vec<&str> = msg.content.split('\n').collect();
+        for (i, line_text) in content_lines.iter().enumerate() {
+            let mut spans: Vec<Span> = vec![];
+
+            if i == 0 {
+                spans.push(Span::styled(format!("{} ", prefix), Style::default().fg(color).bold()));
+            } else {
+                // Indent continuation lines to align with content after prefix
+                spans.push(Span::raw("       "));
+            }
+
+            // Basic markdown rendering
+            if line_text.starts_with("## ") {
+                spans.push(Span::styled(
+                    line_text.trim_start_matches("## "),
+                    Style::default().fg(Color::White).bold(),
+                ));
+            } else if line_text.starts_with("### ") {
+                spans.push(Span::styled(
+                    line_text.trim_start_matches("### "),
+                    Style::default().fg(Color::White).bold(),
+                ));
+            } else if line_text.starts_with("# ") {
+                spans.push(Span::styled(
+                    line_text.trim_start_matches("# "),
+                    Style::default().fg(Color::White).bold(),
+                ));
+            } else if line_text.starts_with("- ") || line_text.starts_with("  - ") {
+                let indent = line_text.len() - line_text.trim_start().len();
+                let bullet_text = line_text.trim_start_matches(|c: char| c == ' ' || c == '-').trim_start();
+                spans.push(Span::raw(" ".repeat(indent)));
+                spans.push(Span::styled("• ", Style::default().fg(Color::DarkGray)));
+                spans.push(Span::raw(bullet_text));
+            } else if line_text.trim().is_empty() {
+                spans.push(Span::raw(""));
+            } else {
+                spans.push(Span::raw(*line_text));
+            }
+
+            lines.push(Line::from(spans));
+            total_lines += 1;
+        }
+        // Add a blank line between messages
+        lines.push(Line::from(""));
+        total_lines += 1;
     }
+
+    let scroll_offset = total_lines.saturating_sub(chunks[0].height.saturating_sub(2) as usize);
     let messages = Paragraph::new(lines)
         .block(Block::default().borders(Borders::ALL).title(" Messages "))
         .wrap(Wrap { trim: false })
-        .scroll((state.messages.len().saturating_sub(chunks[0].height as usize) as u16, 0));
+        .scroll((scroll_offset as u16, 0));
     frame.render_widget(messages, chunks[0]);
 
     // Input (or approval prompt)
