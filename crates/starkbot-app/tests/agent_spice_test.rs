@@ -14,7 +14,7 @@ impl AgentUnderTest for StarkBotAgent {
     async fn run(&self, user_message: &str, config: &AgentConfig) -> Result<AgentOutput, SpiceError> {
         let api_key = std::env::var("OPENAI_API_KEY")
             .map_err(|_| SpiceError::AgentError("OPENAI_API_KEY not set".into()))?;
-        let model_name = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
+        let model_name = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-5.4".to_string());
 
         let personas_dir = std::path::PathBuf::from("personas");
         let skills_dir = std::path::PathBuf::from("skills");

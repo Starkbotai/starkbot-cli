@@ -97,7 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // TUI mode
-    let runner = AgentRunner::build_for_tui(&persona, &skills_dir, &cwd, &api_key, &model_name, approval_mode, Some(db_path.clone()))?;
+    let mut runner = AgentRunner::build_for_tui(&persona, &skills_dir, &cwd, &api_key, &model_name, approval_mode.clone(), Some(db_path.clone()))?;
 
     // Load skills for the graph
     let skill_registry = SkillRegistry::load_from_dir(&skills_dir);
@@ -115,6 +115,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     tui_state.skill_graph = skill_graph;
 
+    // Load personas for TUI tab
+    {
+        let slugs = Persona::list_available(&personas_dir);
+        let mut loaded: Vec<_> = slugs.iter()
+            .filter_map(|s| Persona::load(s, &personas_dir).ok())
+            .collect();
+        loaded.sort_by_key(|p| p.sort_order);
+        tui_state.personas = loaded;
+    }
+
     // Load API keys for TUI tab
     {
         let db = Database::open(&db_path)?;
@@ -123,7 +133,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tui_state.db_path = Some(db_path.clone());
 
     tui_state.add_message("assistant", &format!(
-        "Hello! I'm {} - {}. How can I help?", persona.name(), persona.description
+        "Hello! I'm {}. How can I help?", persona.name()
     ));
 
     // Setup terminal
@@ -167,8 +177,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        // Handle TUI-level actions (e.g., API key add/delete)
+        // Handle TUI-level actions (e.g., API key add/delete, model change)
         handle_tui_actions(&mut tui_state);
+
+        // Handle model change separately (needs runner access)
+        if let Some(starkbot_tui::TuiAction::ChangeModel { model }) = tui_state.pending_action.take() {
+            match AgentRunner::build_for_tui(&persona, &skills_dir, &cwd, &api_key, &model, approval_mode.clone(), Some(db_path.clone())) {
+                Ok(new_runner) => {
+                    runner = new_runner;
+                    tui_state.model_name = model.clone();
+                    tui_state.add_message("assistant", &format!("Model switched to {}.", model));
+                }
+                Err(e) => {
+                    tui_state.add_message("error", &format!("Failed to switch model: {}", e));
+                }
+            }
+        }
 
         // Handle input
         if event::poll(Duration::from_millis(50))? {
@@ -265,6 +289,10 @@ fn handle_tui_actions(state: &mut TuiState) {
                         }
                     }
                 }
+            }
+            // ChangeModel is handled in the main loop (needs runner access)
+            other @ starkbot_tui::TuiAction::ChangeModel { .. } => {
+                state.pending_action = Some(other);
             }
         }
     }

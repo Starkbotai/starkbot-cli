@@ -8,6 +8,7 @@ use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Tabs, Wrap};
 
+use starkbot_core::persona::Persona;
 use starkbot_graph::{GraphData, GraphWidget, Viewport};
 use starkbot_skills::Skill;
 
@@ -18,13 +19,15 @@ pub enum ActiveView {
     Chat,
     Skills,
     Graph,
+    Personas,
     Memory,
     ApiKeys,
+    Settings,
 }
 
 impl ActiveView {
     pub fn titles() -> Vec<&'static str> {
-        vec!["Chat", "Skills", "Graph", "Memory", "API Keys"]
+        vec!["Chat", "Skills", "Graph", "Personas", "Memory", "API Keys", "Settings"]
     }
 
     pub fn index(&self) -> usize {
@@ -32,8 +35,10 @@ impl ActiveView {
             Self::Chat => 0,
             Self::Skills => 1,
             Self::Graph => 2,
-            Self::Memory => 3,
-            Self::ApiKeys => 4,
+            Self::Personas => 3,
+            Self::Memory => 4,
+            Self::ApiKeys => 5,
+            Self::Settings => 6,
         }
     }
 
@@ -41,14 +46,16 @@ impl ActiveView {
         match i {
             1 => Self::Skills,
             2 => Self::Graph,
-            3 => Self::Memory,
-            4 => Self::ApiKeys,
+            3 => Self::Personas,
+            4 => Self::Memory,
+            5 => Self::ApiKeys,
+            6 => Self::Settings,
             _ => Self::Chat,
         }
     }
 
     pub fn next(&self) -> Self {
-        Self::from_index((self.index() + 1) % 5)
+        Self::from_index((self.index() + 1) % 7)
     }
 }
 
@@ -56,6 +63,7 @@ impl ActiveView {
 pub enum TuiAction {
     AddApiKey { name: String, key: String },
     DeleteApiKey { name: String },
+    ChangeModel { model: String },
 }
 
 /// A chat message in the TUI.
@@ -88,6 +96,8 @@ pub struct TuiState {
     pub skill_names: Vec<String>,
     pub skills: Vec<Skill>,
     pub selected_skill: usize,
+    pub personas: Vec<Persona>,
+    pub selected_persona: usize,
     pub should_quit: bool,
     pub agent_busy: bool,
     // API keys state
@@ -99,10 +109,21 @@ pub struct TuiState {
     api_key_input_mode: ApiKeyInputMode,
     api_key_name_input: String,
     api_key_value_input: String,
+    // Settings state
+    pub available_models: Vec<String>,
+    pub selected_model: usize,
 }
 
 impl TuiState {
     pub fn new(persona_name: &str, model_name: &str) -> Self {
+        let available_models = vec![
+            "gpt-5.4".to_string(),
+            "gpt-5.4-mini".to_string(),
+            "gpt-5.5".to_string(),
+        ];
+        let selected_model = available_models.iter()
+            .position(|m| m == model_name)
+            .unwrap_or(0);
         Self {
             active_view: ActiveView::Chat,
             messages: vec![],
@@ -117,6 +138,8 @@ impl TuiState {
             skill_names: vec![],
             skills: vec![],
             selected_skill: 0,
+            personas: vec![],
+            selected_persona: 0,
             should_quit: false,
             agent_busy: false,
             api_keys: vec![],
@@ -126,6 +149,8 @@ impl TuiState {
             api_key_input_mode: ApiKeyInputMode::Normal,
             api_key_name_input: String::new(),
             api_key_value_input: String::new(),
+            available_models,
+            selected_model,
         }
     }
 
@@ -156,8 +181,10 @@ pub fn handle_key(state: &mut TuiState, key: KeyEvent) -> Option<String> {
         ActiveView::Chat => handle_chat_key(state, key),
         ActiveView::Skills => { handle_skills_key(state, key); None }
         ActiveView::Graph => { handle_graph_key(state, key); None }
+        ActiveView::Personas => { handle_personas_key(state, key); None }
         ActiveView::Memory => { handle_memory_key(state, key); None }
         ActiveView::ApiKeys => { handle_api_keys_key(state, key); None }
+        ActiveView::Settings => { handle_settings_key(state, key); None }
     }
 }
 
@@ -200,6 +227,21 @@ fn handle_skills_key(state: &mut TuiState, key: KeyEvent) {
         KeyCode::Down | KeyCode::Char('j') => {
             if !state.skill_names.is_empty() {
                 state.selected_skill = (state.selected_skill + 1).min(state.skill_names.len() - 1);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_personas_key(state: &mut TuiState, key: KeyEvent) {
+    match key.code {
+        KeyCode::Tab => state.active_view = state.active_view.next(),
+        KeyCode::Up | KeyCode::Char('k') => {
+            state.selected_persona = state.selected_persona.saturating_sub(1);
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if !state.personas.is_empty() {
+                state.selected_persona = (state.selected_persona + 1).min(state.personas.len() - 1);
             }
         }
         _ => {}
@@ -332,8 +374,10 @@ pub fn draw(frame: &mut ratatui::Frame, state: &TuiState) {
         ActiveView::Chat => draw_chat(frame, state, chunks[1]),
         ActiveView::Skills => draw_skills(frame, state, chunks[1]),
         ActiveView::Graph => draw_graph(frame, state, chunks[1]),
+        ActiveView::Personas => draw_personas(frame, state, chunks[1]),
         ActiveView::Memory => draw_memory(frame, state, chunks[1]),
         ActiveView::ApiKeys => draw_api_keys(frame, state, chunks[1]),
+        ActiveView::Settings => draw_settings(frame, state, chunks[1]),
     }
 
     // Status bar
@@ -471,6 +515,70 @@ fn draw_skills(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
     frame.render_widget(detail, chunks[1]);
 }
 
+fn draw_personas(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+        .split(area);
+
+    // Persona list
+    let items: Vec<Line> = state.personas.iter().enumerate().map(|(i, p)| {
+        let style = if i == state.selected_persona {
+            Style::default().fg(Color::Cyan).bold()
+        } else {
+            Style::default()
+        };
+        let marker = if i == state.selected_persona { "▸ " } else { "  " };
+        let label = format!("{}{} {}", marker, p.emoji, p.label);
+        Line::from(Span::styled(label, style))
+    }).collect();
+    let list = Paragraph::new(items)
+        .block(Block::default().borders(Borders::ALL).title(" Personas "));
+    frame.render_widget(list, chunks[0]);
+
+    // Persona detail
+    let detail_text = if state.personas.is_empty() {
+        "No personas loaded".to_string()
+    } else if state.selected_persona < state.personas.len() {
+        let p = &state.personas[state.selected_persona];
+        let mut text = format!("{} {}\n", p.emoji, p.label);
+        if !p.description.is_empty() {
+            text.push_str(&format!("{}\n", p.description));
+        }
+        text.push('\n');
+        text.push_str(&format!("Version: {}\n", p.version));
+        text.push_str(&format!("Enabled: {}\n", if p.enabled { "yes" } else { "no" }));
+        if !p.tool_groups.is_empty() {
+            text.push_str(&format!("Tool groups: {}\n", p.tool_groups.join(", ")));
+        }
+        if !p.skill_tags.is_empty() {
+            text.push_str(&format!("Skill tags: {}\n", p.skill_tags.join(", ")));
+        }
+        if !p.explicit_skills.is_empty() {
+            text.push_str(&format!("Skills: {}\n", p.explicit_skills.join(", ")));
+        }
+        text.push_str("\n─────────────────────────────────\n\n");
+        // Show a preview of the system prompt (first 500 chars)
+        let preview: String = p.system_prompt.chars().take(500).collect();
+        text.push_str(&preview);
+        if p.system_prompt.len() > 500 {
+            text.push_str("\n...");
+        }
+        text
+    } else {
+        String::new()
+    };
+    let detail_title = if state.selected_persona < state.personas.len() {
+        format!(" {} ", state.personas[state.selected_persona].label)
+    } else {
+        " Detail ".to_string()
+    };
+    let detail = Paragraph::new(detail_text)
+        .block(Block::default().borders(Borders::ALL).title(detail_title))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(detail, chunks[1]);
+}
+
 fn draw_graph(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
     let block = Block::default().borders(Borders::ALL).title(" Skill Graph ");
     let inner = block.inner(area);
@@ -574,6 +682,84 @@ fn draw_api_keys(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
 
     let detail = Paragraph::new(detail_lines)
         .block(Block::default().borders(Borders::ALL).title(" Details "))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(detail, chunks[1]);
+}
+
+fn handle_settings_key(state: &mut TuiState, key: KeyEvent) {
+    match key.code {
+        KeyCode::Tab => state.active_view = state.active_view.next(),
+        KeyCode::Up | KeyCode::Char('k') => {
+            state.selected_model = state.selected_model.saturating_sub(1);
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if !state.available_models.is_empty() {
+                state.selected_model = (state.selected_model + 1).min(state.available_models.len() - 1);
+            }
+        }
+        KeyCode::Enter => {
+            if state.selected_model < state.available_models.len() {
+                let new_model = &state.available_models[state.selected_model];
+                if *new_model != state.model_name {
+                    state.pending_action = Some(TuiAction::ChangeModel {
+                        model: new_model.clone(),
+                    });
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn draw_settings(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .split(area);
+
+    // Left panel: model list
+    let items: Vec<Line> = state.available_models.iter().enumerate().map(|(i, model)| {
+        let is_current = *model == state.model_name;
+        let is_selected = i == state.selected_model;
+        let style = if is_selected {
+            Style::default().fg(Color::Cyan).bold()
+        } else if is_current {
+            Style::default().fg(Color::Green)
+        } else {
+            Style::default()
+        };
+        let marker = if is_selected { "▸ " } else { "  " };
+        let current_tag = if is_current { " (active)" } else { "" };
+        Line::from(Span::styled(format!("{}{}{}", marker, model, current_tag), style))
+    }).collect();
+    let list = Paragraph::new(items)
+        .block(Block::default().borders(Borders::ALL).title(" Models "));
+    frame.render_widget(list, chunks[0]);
+
+    // Right panel: info
+    let mut detail_lines: Vec<Line> = vec![];
+    if state.selected_model < state.available_models.len() {
+        let model = &state.available_models[state.selected_model];
+        detail_lines.push(Line::from(Span::styled(
+            format!(" Model: {}", model), Style::default().fg(Color::White).bold(),
+        )));
+        detail_lines.push(Line::from(""));
+        let desc = match model.as_str() {
+            "gpt-5.4" => "Default model. Good balance of speed and capability.",
+            "gpt-5.4-mini" => "Faster and cheaper. Best for simple tasks.",
+            "gpt-5.5" => "Most capable. Best for complex reasoning.",
+            _ => "",
+        };
+        detail_lines.push(Line::from(Span::styled(format!(" {}", desc), Style::default().fg(Color::DarkGray))));
+        detail_lines.push(Line::from(""));
+    }
+    detail_lines.push(Line::from(Span::styled(" Shortcuts:", Style::default().fg(Color::Cyan))));
+    detail_lines.push(Line::from("   j/k - Navigate"));
+    detail_lines.push(Line::from("   Enter - Select model"));
+    detail_lines.push(Line::from("   Tab - Switch view"));
+
+    let detail = Paragraph::new(detail_lines)
+        .block(Block::default().borders(Borders::ALL).title(" Info "))
         .wrap(Wrap { trim: false });
     frame.render_widget(detail, chunks[1]);
 }
