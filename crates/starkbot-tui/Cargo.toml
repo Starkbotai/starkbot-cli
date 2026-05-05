@@ -1,0 +1,14 @@
+[package]
+name = "starkbot-tui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+starkbot-core = { path = "../starkbot-core" }
+starkbot-graph = { path = "../starkbot-graph" }
+starkbot-skills = { path = "../starkbot-skills" }
+starkbot-memory = { path = "../starkbot-memory" }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+tokio = { workspace = true }
+log = { workspace = true }

@@ -1,0 +1,7 @@
+target/
+.env
+*.db
+*.db-journal
+*.db-wal
+test-traces/
+test-report.json

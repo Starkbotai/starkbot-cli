@@ -1,0 +1,33 @@
+[package]
+name = "starkbot-app"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "starkbot"
+path = "src/main.rs"
+
+[dependencies]
+starkbot-tui = { path = "../starkbot-tui" }
+starkbot-core = { path = "../starkbot-core" }
+starkbot-tools = { path = "../starkbot-tools" }
+starkbot-skills = { path = "../starkbot-skills" }
+starkbot-memory = { path = "../starkbot-memory" }
+starkbot-db = { path = "../starkbot-db" }
+starkbot-graph = { path = "../starkbot-graph" }
+metalcraft = { workspace = true }
+rig = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+dotenvy = { workspace = true }
+chrono = { workspace = true }
+crossterm = { workspace = true }
+ratatui = { workspace = true }
+
+[dev-dependencies]
+spice-framework = { workspace = true }
+async-trait = { workspace = true }
+uuid = { workspace = true }

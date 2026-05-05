@@ -1,0 +1,17 @@
+[package]
+name = "starkbot-tools"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+metalcraft = { workspace = true }
+rig = { workspace = true }
+starkbot-skills = { path = "../starkbot-skills" }
+starkbot-memory = { path = "../starkbot-memory" }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+reqwest = { workspace = true }
+htmd = { workspace = true }
