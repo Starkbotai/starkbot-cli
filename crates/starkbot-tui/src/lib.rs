@@ -116,6 +116,9 @@ pub struct TuiState {
     pub selected_model: usize,
     // Approval prompt state
     pub pending_approval: Option<PendingApproval>,
+    // Chat scroll state
+    pub chat_scroll: u16,
+    pub chat_scroll_pinned_bottom: bool, // auto-scroll to bottom on new messages
 }
 
 /// A pending tool approval being shown in the TUI.
@@ -162,6 +165,8 @@ impl TuiState {
             available_models,
             selected_model,
             pending_approval: None,
+            chat_scroll: 0,
+            chat_scroll_pinned_bottom: true,
         }
     }
 
@@ -170,6 +175,10 @@ impl TuiState {
             role: role.to_string(),
             content: content.to_string(),
         });
+        // Auto-scroll to bottom on new messages if pinned
+        if self.chat_scroll_pinned_bottom {
+            self.chat_scroll = u16::MAX; // will be clamped in draw
+        }
     }
 
     pub fn add_tool_activity(&mut self, activity: &str) {
@@ -222,11 +231,33 @@ fn handle_chat_key(state: &mut TuiState, key: KeyEvent) -> Option<String> {
 
     match key.code {
         KeyCode::Tab => { state.active_view = state.active_view.next(); None }
+        KeyCode::PageUp => {
+            state.chat_scroll = state.chat_scroll.saturating_sub(10);
+            state.chat_scroll_pinned_bottom = false;
+            None
+        }
+        KeyCode::PageDown => {
+            state.chat_scroll = state.chat_scroll.saturating_add(10);
+            // Will be clamped in draw; if at max, re-pin
+            state.chat_scroll_pinned_bottom = true;
+            None
+        }
+        KeyCode::Up if state.agent_busy || state.input.is_empty() => {
+            state.chat_scroll = state.chat_scroll.saturating_sub(1);
+            state.chat_scroll_pinned_bottom = false;
+            None
+        }
+        KeyCode::Down if state.agent_busy || state.input.is_empty() => {
+            state.chat_scroll = state.chat_scroll.saturating_add(1);
+            state.chat_scroll_pinned_bottom = true;
+            None
+        }
         KeyCode::Enter => {
             if state.agent_busy || state.input.is_empty() { return None; }
             let input = state.input.clone();
             state.input.clear();
             state.input_cursor = 0;
+            state.chat_scroll_pinned_bottom = true;
             Some(input)
         }
         KeyCode::Char(c) => {
@@ -422,9 +453,56 @@ pub fn draw(frame: &mut ratatui::Frame, state: &TuiState) {
         Span::raw(" │ "),
         Span::styled(format!("Model: {}", state.model_name), Style::default().fg(Color::DarkGray)),
         Span::raw(" │ "),
-        Span::styled("Tab: switch │ Ctrl+C: quit", Style::default().fg(Color::DarkGray)),
+        Span::styled("Tab: switch │ PgUp/Dn: scroll │ Ctrl+C: quit", Style::default().fg(Color::DarkGray)),
     ]);
     frame.render_widget(Paragraph::new(status), chunks[2]);
+}
+
+/// Render inline markdown: **bold**, `code`, and plain text.
+fn render_inline_markdown<'a>(text: &'a str, spans: &mut Vec<Span<'a>>) {
+    let mut remaining = text;
+    while !remaining.is_empty() {
+        // Check for **bold**
+        if let Some(start) = remaining.find("**") {
+            if start > 0 {
+                spans.push(Span::raw(&remaining[..start]));
+            }
+            let after_start = &remaining[start + 2..];
+            if let Some(end) = after_start.find("**") {
+                spans.push(Span::styled(
+                    &after_start[..end],
+                    Style::default().fg(Color::White).bold(),
+                ));
+                remaining = &after_start[end + 2..];
+            } else {
+                // No closing **, just output as-is
+                spans.push(Span::raw(&remaining[start..]));
+                return;
+            }
+        }
+        // Check for `code`
+        else if let Some(start) = remaining.find('`') {
+            if start > 0 {
+                spans.push(Span::raw(&remaining[..start]));
+            }
+            let after_start = &remaining[start + 1..];
+            if let Some(end) = after_start.find('`') {
+                spans.push(Span::styled(
+                    &after_start[..end],
+                    Style::default().fg(Color::Yellow),
+                ));
+                remaining = &after_start[end + 1..];
+            } else {
+                spans.push(Span::raw(&remaining[start..]));
+                return;
+            }
+        }
+        // No more inline markdown
+        else {
+            spans.push(Span::raw(remaining));
+            return;
+        }
+    }
 }
 
 fn draw_chat(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
@@ -438,9 +516,10 @@ fn draw_chat(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
         ])
         .split(area);
 
-    // Messages — render multi-line content with basic markdown styling
+    // Messages — render multi-line content with markdown styling
     let mut lines: Vec<Line> = vec![];
-    let mut total_lines: usize = 0;
+    let mut in_code_block = false;
+
     for msg in &state.messages {
         let (prefix, color) = match msg.role.as_str() {
             "user" => ("[you]", Color::Green),
@@ -457,11 +536,37 @@ fn draw_chat(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
             if i == 0 {
                 spans.push(Span::styled(format!("{} ", prefix), Style::default().fg(color).bold()));
             } else {
-                // Indent continuation lines to align with content after prefix
                 spans.push(Span::raw("       "));
             }
 
-            // Basic markdown rendering
+            // Code block toggle
+            if line_text.starts_with("```") {
+                in_code_block = !in_code_block;
+                if in_code_block {
+                    let lang = line_text.trim_start_matches('`').trim();
+                    if !lang.is_empty() {
+                        spans.push(Span::styled(format!("─── {} ", lang), Style::default().fg(Color::DarkGray)));
+                    } else {
+                        spans.push(Span::styled("───", Style::default().fg(Color::DarkGray)));
+                    }
+                } else {
+                    spans.push(Span::styled("───", Style::default().fg(Color::DarkGray)));
+                }
+                lines.push(Line::from(spans));
+                continue;
+            }
+
+            if in_code_block {
+                // Code block content — render in a distinct style
+                spans.push(Span::styled(
+                    format!("  {}", line_text),
+                    Style::default().fg(Color::Green),
+                ));
+                lines.push(Line::from(spans));
+                continue;
+            }
+
+            // Markdown rendering
             if line_text.starts_with("## ") {
                 spans.push(Span::styled(
                     line_text.trim_start_matches("## "),
@@ -470,38 +575,65 @@ fn draw_chat(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
             } else if line_text.starts_with("### ") {
                 spans.push(Span::styled(
                     line_text.trim_start_matches("### "),
-                    Style::default().fg(Color::White).bold(),
+                    Style::default().fg(Color::Cyan).bold(),
                 ));
             } else if line_text.starts_with("# ") {
                 spans.push(Span::styled(
                     line_text.trim_start_matches("# "),
                     Style::default().fg(Color::White).bold(),
                 ));
-            } else if line_text.starts_with("- ") || line_text.starts_with("  - ") {
+            } else if line_text.starts_with("- ") || line_text.starts_with("  - ") || line_text.starts_with("    - ") {
                 let indent = line_text.len() - line_text.trim_start().len();
                 let bullet_text = line_text.trim_start_matches(|c: char| c == ' ' || c == '-').trim_start();
                 spans.push(Span::raw(" ".repeat(indent)));
                 spans.push(Span::styled("• ", Style::default().fg(Color::DarkGray)));
-                spans.push(Span::raw(bullet_text));
+                render_inline_markdown(bullet_text, &mut spans);
             } else if line_text.trim().is_empty() {
                 spans.push(Span::raw(""));
+            } else if line_text.starts_with(|c: char| c.is_ascii_digit()) && line_text.contains(". ") {
+                // Numbered list
+                if let Some(pos) = line_text.find(". ") {
+                    let num = &line_text[..pos + 2];
+                    let rest = &line_text[pos + 2..];
+                    spans.push(Span::styled(num, Style::default().fg(Color::DarkGray)));
+                    render_inline_markdown(rest, &mut spans);
+                } else {
+                    render_inline_markdown(line_text, &mut spans);
+                }
             } else {
-                spans.push(Span::raw(*line_text));
+                render_inline_markdown(line_text, &mut spans);
             }
 
             lines.push(Line::from(spans));
-            total_lines += 1;
         }
-        // Add a blank line between messages
+        // Blank line between messages
         lines.push(Line::from(""));
-        total_lines += 1;
     }
 
-    let scroll_offset = total_lines.saturating_sub(chunks[0].height.saturating_sub(2) as usize);
+    // Calculate scroll — account for wrapping by estimating wrapped line count
+    let content_width = chunks[0].width.saturating_sub(2) as usize; // minus borders
+    let visible_height = chunks[0].height.saturating_sub(2) as usize; // minus borders
+    let mut wrapped_total: usize = 0;
+    for line in &lines {
+        let line_width: usize = line.spans.iter().map(|s| s.content.len()).sum();
+        if content_width > 0 && line_width > content_width {
+            wrapped_total += (line_width + content_width - 1) / content_width;
+        } else {
+            wrapped_total += 1;
+        }
+    }
+
+    let max_scroll = wrapped_total.saturating_sub(visible_height) as u16;
+    let scroll_offset = if state.chat_scroll_pinned_bottom || state.chat_scroll >= max_scroll {
+        max_scroll
+    } else {
+        state.chat_scroll.min(max_scroll)
+    };
+
     let messages = Paragraph::new(lines)
         .block(Block::default().borders(Borders::ALL).title(" Messages "))
         .wrap(Wrap { trim: false })
-        .scroll((scroll_offset as u16, 0));
+        .scroll((scroll_offset, 0));
     frame.render_widget(messages, chunks[0]);
 
     // Input (or approval prompt)
