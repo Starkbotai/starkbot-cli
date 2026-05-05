@@ -100,23 +100,41 @@ SQLite-backed with:
 ### Prerequisites
 
 - Rust toolchain (1.75+)
-- An OpenAI API key
+- An OpenAI-compatible API key (OpenAI, Azure OpenAI, or any compatible endpoint)
 
-### Build
+### 1. Clone & Build
 
 ```bash
-git clone <repo-url> && cd starkbot-cli
+git clone git@github.com:Starkbotai/starkbot-cli.git
+cd starkbot-cli
 cargo build --release
 ```
 
-### Configure
+### 2. Set Environment Variables
+
+StarkBot requires at minimum an `OPENAI_API_KEY`. You can either export it directly or use a `.env` file in the project root:
 
 ```bash
-cp .env.example .env
-# Edit .env and set your OPENAI_API_KEY
+# Option A: Export directly
+export OPENAI_API_KEY="sk-your-key-here"
+
+# Option B: Create a .env file
+cat > .env << 'EOF'
+OPENAI_API_KEY=sk-your-key-here
+EOF
 ```
 
-### Run
+**Available environment variables:**
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `OPENAI_API_KEY` | **Yes** | — | Your OpenAI API key |
+| `OPENAI_MODEL` | No | `gpt-4o` | Model to use (e.g. `gpt-4o`, `gpt-4o-mini`, `o3`) |
+| `RUST_LOG` | No | — | Log level (`debug`, `info`, `warn`, `error`) |
+
+> **Tip:** You can also manage API keys from within the TUI using the API Keys tab, which stores them encrypted in the local SQLite database.
+
+### 3. Run
 
 **Interactive TUI:**
 ```bash
@@ -128,6 +146,13 @@ cp .env.example .env
 **One-shot mode:**
 ```bash
 ./target/release/starkbot coding-agent "Read Cargo.toml and summarize the dependencies"
+```
+
+### 4. Verify It Works
+
+```bash
+# Quick smoke test — should print a response and exit
+./target/release/starkbot coding-agent "Say hello"
 ```
 
 ### TUI Controls
