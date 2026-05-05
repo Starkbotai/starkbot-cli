@@ -41,7 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let auto_approve = args.iter().any(|a| a == "--auto-approve");
     let args: Vec<String> = args.into_iter().filter(|a| a != "--auto-approve").collect();
 
-    let persona_slug = args.first().map(|s| s.as_str()).unwrap_or("coding-agent");
+    let persona_slug = args.first().map(|s| s.as_str()).unwrap_or("starkbot");
     let one_shot_task = if args.len() > 1 { Some(args[1..].join(" ")) } else { None };
 
     let personas_dir = Persona::default_personas_dir();
