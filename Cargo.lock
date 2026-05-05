@@ -7264,6 +7264,7 @@ dependencies = [
  "starkbot-graph",
  "starkbot-memory",
  "starkbot-skills",
+ "starkbot-tools",
  "tokio",
 ]
 
