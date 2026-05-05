@@ -7,6 +7,7 @@ edition = "2021"
 starkbot-core = { path = "../starkbot-core" }
 starkbot-graph = { path = "../starkbot-graph" }
 starkbot-skills = { path = "../starkbot-skills" }
+starkbot-tools = { path = "../starkbot-tools" }
 starkbot-memory = { path = "../starkbot-memory" }
 starkbot-db = { path = "../starkbot-db" }
 ratatui = { workspace = true }

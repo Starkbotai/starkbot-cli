@@ -10,8 +10,8 @@ use starkbot_core::persona::Persona;
 use starkbot_db::Database;
 use starkbot_graph::build_skill_graph;
 use starkbot_skills::SkillRegistry;
-use starkbot_tools::approval::ApprovalMode;
-use starkbot_tui::{draw, handle_key, TuiState};
+use starkbot_tools::approval::{self, ApprovalMode};
+use starkbot_tui::{draw, handle_key, PendingApproval, TuiState};
 use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -96,8 +96,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return run_oneshot(&persona, &skills_dir, &cwd, &api_key, &model_name, approval_mode, &task, &db_path).await;
     }
 
-    // TUI mode
-    let mut runner = AgentRunner::build_for_tui(&persona, &skills_dir, &cwd, &api_key, &model_name, approval_mode.clone(), Some(db_path.clone()))?;
+    // TUI mode — use channel-based approval so prompts render in-frame
+    let (approval_tx, approval_rx) = approval::approval_channel();
+    let tui_approval_mode = if auto_approve {
+        ApprovalMode::AutoApprove
+    } else {
+        ApprovalMode::tui_interactive(approval_tx.clone())
+    };
+    let mut runner = AgentRunner::build_for_tui(&persona, &skills_dir, &cwd, &api_key, &model_name, tui_approval_mode.clone(), Some(db_path.clone()))?;
 
     // Load skills for the graph
     let skill_registry = SkillRegistry::load_from_dir(&skills_dir);
@@ -177,12 +183,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
+        // Check for approval requests (non-blocking)
+        if tui_state.pending_approval.is_none() {
+            if let Ok((request, resp_tx)) = approval_rx.try_recv() {
+                tui_state.pending_approval = Some(PendingApproval { request, response_tx: resp_tx });
+            }
+        }
+
         // Handle TUI-level actions (e.g., API key add/delete, model change)
         handle_tui_actions(&mut tui_state);
 
         // Handle model change separately (needs runner access)
         if let Some(starkbot_tui::TuiAction::ChangeModel { model }) = tui_state.pending_action.take() {
-            match AgentRunner::build_for_tui(&persona, &skills_dir, &cwd, &api_key, &model, approval_mode.clone(), Some(db_path.clone())) {
+            match AgentRunner::build_for_tui(&persona, &skills_dir, &cwd, &api_key, &model, tui_approval_mode.clone(), Some(db_path.clone())) {
                 Ok(new_runner) => {
                     runner = new_runner;
                     tui_state.model_name = model.clone();

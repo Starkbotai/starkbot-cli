@@ -11,8 +11,10 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Tabs, Wrap};
 use starkbot_core::persona::Persona;
 use starkbot_graph::{GraphData, GraphWidget, Viewport};
 use starkbot_skills::Skill;
+use starkbot_tools::approval::ApprovalRequest;
 
 use std::path::PathBuf;
+use std::sync::mpsc::SyncSender;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum ActiveView {
@@ -112,6 +114,14 @@ pub struct TuiState {
     // Settings state
     pub available_models: Vec<String>,
     pub selected_model: usize,
+    // Approval prompt state
+    pub pending_approval: Option<PendingApproval>,
+}
+
+/// A pending tool approval being shown in the TUI.
+pub struct PendingApproval {
+    pub request: ApprovalRequest,
+    pub response_tx: SyncSender<bool>,
 }
 
 impl TuiState {
@@ -151,6 +161,7 @@ impl TuiState {
             api_key_value_input: String::new(),
             available_models,
             selected_model,
+            pending_approval: None,
         }
     }
 
@@ -189,6 +200,26 @@ pub fn handle_key(state: &mut TuiState, key: KeyEvent) -> Option<String> {
 }
 
 fn handle_chat_key(state: &mut TuiState, key: KeyEvent) -> Option<String> {
+    // Handle approval prompt first
+    if state.pending_approval.is_some() {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                if let Some(approval) = state.pending_approval.take() {
+                    let _ = approval.response_tx.send(true);
+                    state.add_message("tool", &format!("✓ Approved: {}", approval.request.tool_name));
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                if let Some(approval) = state.pending_approval.take() {
+                    let _ = approval.response_tx.send(false);
+                    state.add_message("tool", &format!("✗ Denied: {}", approval.request.tool_name));
+                }
+            }
+            _ => {}
+        }
+        return None;
+    }
+
     match key.code {
         KeyCode::Tab => { state.active_view = state.active_view.next(); None }
         KeyCode::Enter => {
@@ -397,12 +428,13 @@ pub fn draw(frame: &mut ratatui::Frame, state: &TuiState) {
 }
 
 fn draw_chat(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
+    let input_height = if state.pending_approval.is_some() { 6 } else { 3 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(5),     // Messages
-            Constraint::Length(3),  // Input
-            Constraint::Length(3),  // Tool activity
+            Constraint::Min(5),                    // Messages
+            Constraint::Length(input_height),      // Input / Approval
+            Constraint::Length(3),                 // Tool activity
         ])
         .split(area);
 
@@ -427,20 +459,50 @@ fn draw_chat(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
         .scroll((state.messages.len().saturating_sub(chunks[0].height as usize) as u16, 0));
     frame.render_widget(messages, chunks[0]);
 
-    // Input
-    let input_display = if state.agent_busy {
-        " Agent is thinking...".to_string()
+    // Input (or approval prompt)
+    if let Some(ref approval) = state.pending_approval {
+        let mut lines = vec![
+            Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(&approval.request.tool_name, Style::default().fg(Color::White).bold()),
+            ]),
+        ];
+        // Show args on separate lines for readability
+        for part in approval.request.args_display.split('\n') {
+            let trimmed = if part.len() > 70 { format!("{:.70}...", part) } else { part.to_string() };
+            lines.push(Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(trimmed, Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("                    ", Style::default()),
+            Span::styled("[Y]", Style::default().fg(Color::Green).bold()),
+            Span::styled("es  ", Style::default().fg(Color::Green)),
+            Span::styled("[N]", Style::default().fg(Color::Red).bold()),
+            Span::styled("o", Style::default().fg(Color::Red)),
+        ]));
+        let input = Paragraph::new(lines)
+            .block(Block::default().borders(Borders::ALL)
+                .title(Span::styled(" ⚡ Approve Tool ", Style::default().fg(Color::Yellow).bold()))
+                .border_style(Style::default().fg(Color::Yellow)));
+        frame.render_widget(input, chunks[1]);
     } else {
-        format!(" > {}", state.input)
-    };
-    let input = Paragraph::new(input_display)
-        .block(Block::default().borders(Borders::ALL).title(" Input "))
-        .style(if state.agent_busy {
-            Style::default().fg(Color::DarkGray)
+        let input_display = if state.agent_busy {
+            " Agent is thinking...".to_string()
         } else {
-            Style::default()
-        });
-    frame.render_widget(input, chunks[1]);
+            format!(" > {}", state.input)
+        };
+        let input = Paragraph::new(input_display)
+            .block(Block::default().borders(Borders::ALL).title(" Input "))
+            .style(if state.agent_busy {
+                Style::default().fg(Color::DarkGray)
+            } else {
+                Style::default()
+            });
+        frame.render_widget(input, chunks[1]);
+    }
 
     // Tool activity
     let activity: Vec<Line> = state.tool_activity.iter().rev().take(2)
