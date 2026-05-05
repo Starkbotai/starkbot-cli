@@ -60,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let api_key = std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY must be set");
-    let model_name = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4o".to_string());
+    let model_name = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-5.4".to_string());
 
     let approval_mode = if auto_approve {
         ApprovalMode::AutoApprove
@@ -97,7 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // TUI mode
-    let runner = AgentRunner::build_with_db(&persona, &skills_dir, &cwd, &api_key, &model_name, approval_mode, Some(db_path.clone()))?;
+    let runner = AgentRunner::build_for_tui(&persona, &skills_dir, &cwd, &api_key, &model_name, approval_mode, Some(db_path.clone()))?;
 
     // Load skills for the graph
     let skill_registry = SkillRegistry::load_from_dir(&skills_dir);
@@ -132,6 +132,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
+    terminal.clear()?;
 
     let (agent_tx, mut agent_rx) = mpsc::unbounded_channel::<AgentEvent>();
     let mut agent_state: Option<AgentState> = None;

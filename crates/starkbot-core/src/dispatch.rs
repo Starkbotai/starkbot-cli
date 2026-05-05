@@ -32,7 +32,7 @@ impl AgentRunner {
         Self::build_with_db(persona, skills_dir, cwd, api_key, model_name, approval_mode, None)
     }
 
-    /// Build an agent runner with optional database path for API key tools.
+    /// Build an agent runner with optional database path and verbose guard output.
     pub fn build_with_db(
         persona: &Persona,
         skills_dir: &Path,
@@ -41,6 +41,32 @@ impl AgentRunner {
         model_name: &str,
         approval_mode: ApprovalMode,
         db_path: Option<PathBuf>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::build_inner(persona, skills_dir, cwd, api_key, model_name, approval_mode, db_path, true)
+    }
+
+    /// Build an agent runner for TUI mode (no stderr output from guard).
+    pub fn build_for_tui(
+        persona: &Persona,
+        skills_dir: &Path,
+        cwd: &str,
+        api_key: &str,
+        model_name: &str,
+        approval_mode: ApprovalMode,
+        db_path: Option<PathBuf>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::build_inner(persona, skills_dir, cwd, api_key, model_name, approval_mode, db_path, false)
+    }
+
+    fn build_inner(
+        persona: &Persona,
+        skills_dir: &Path,
+        cwd: &str,
+        api_key: &str,
+        model_name: &str,
+        approval_mode: ApprovalMode,
+        db_path: Option<PathBuf>,
+        verbose_guard: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // Load skill registry for tag-based discovery
         let skill_registry = SkillRegistry::load_from_dir(skills_dir);
@@ -71,7 +97,10 @@ impl AgentRunner {
         let model = client.completion_model(model_name);
         let hook = approval::build_hook(approval_mode);
         let graph = create_react_agent_with_hooks(model, registry, &system_prompt, hook)?.into_arc();
-        let step_guard = guard::build_agent_guard(guard::GuardConfig::default());
+        let step_guard = guard::build_agent_guard(guard::GuardConfig {
+            verbose: verbose_guard,
+            ..guard::GuardConfig::default()
+        });
 
         Ok(Self {
             graph,

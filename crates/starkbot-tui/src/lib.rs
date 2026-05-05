@@ -6,7 +6,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Tabs, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph, Tabs, Wrap};
 
 use starkbot_graph::{GraphData, GraphWidget, Viewport};
 use starkbot_skills::Skill;
@@ -306,6 +306,9 @@ fn handle_api_keys_key(state: &mut TuiState, key: KeyEvent) {
 
 /// Draw the full TUI frame.
 pub fn draw(frame: &mut ratatui::Frame, state: &TuiState) {
+    // Clear the entire frame to prevent ghosting artifacts from previous views
+    frame.render_widget(Clear, frame.area());
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
