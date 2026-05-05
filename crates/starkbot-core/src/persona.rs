@@ -320,7 +320,9 @@ impl Persona {
         // Skills section — data-driven from skill file frontmatter
         if !skills.is_empty() {
             prompt.push_str("\n\n# Available Skills\n");
-            prompt.push_str("Use the `load_skill` tool to load detailed guidance for any of these skills.\n");
+            prompt.push_str("IMPORTANT: Before starting any task, check if a relevant skill exists below. ");
+            prompt.push_str("If it does, you MUST call `load_skill` FIRST to load the skill's methodology, ");
+            prompt.push_str("then follow its steps. Do NOT skip skill loading and jump straight to raw tool calls.\n\n");
             prompt.push_str("Available skills:\n");
             for skill in skills {
                 let desc = load_skill_description(skill, skills_dir);

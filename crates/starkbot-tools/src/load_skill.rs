@@ -17,7 +17,7 @@ impl LoadSkillTool {
 impl metalcraft::Tool for LoadSkillTool {
     fn name(&self) -> &str { "load_skill" }
     fn description(&self) -> &str {
-        "Load a skill by name to get detailed guidance for a specific task type."
+        "Load a skill by name. MUST be called before starting any task that matches an available skill. Returns step-by-step methodology to follow."
     }
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
