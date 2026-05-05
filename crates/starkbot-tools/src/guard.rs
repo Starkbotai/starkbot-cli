@@ -36,6 +36,10 @@ impl GuardTracker {
     }
 
     fn check(&mut self, state: &AgentState) -> GuardAction {
+        // Messages may shrink after compaction — reset if our cursor is past the end
+        if self.seen_up_to > state.messages.len() {
+            self.seen_up_to = 0;
+        }
         let new_messages = &state.messages[self.seen_up_to..];
         self.seen_up_to = state.messages.len();
 
@@ -125,5 +129,10 @@ fn summarize_args(args: &serde_json::Value) -> String {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max { s.to_string() } else { format!("{}...", &s[..max]) }
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        let end = s.char_indices().nth(max).map(|(i, _)| i).unwrap_or(s.len());
+        format!("{}...", &s[..end])
+    }
 }
