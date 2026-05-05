@@ -31,7 +31,7 @@ impl metalcraft::Tool for SubAgentTool {
                     "description": "Tool set: 'read_only' (default) or 'full'"
                 }
             },
-            "required": ["task"]
+            "required": ["task", "tool_set"]
         })
     }
     async fn call(&self, args: serde_json::Value) -> metalcraft::Result<serde_json::Value> {

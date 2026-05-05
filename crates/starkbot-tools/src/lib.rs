@@ -1,7 +1,9 @@
+pub mod api_keys_check;
 pub mod bash;
 pub mod edit_file;
 pub mod find_files;
 pub mod grep;
+pub mod install_api_key;
 pub mod list_files;
 pub mod load_skill;
 pub mod read_file;
@@ -21,6 +23,7 @@ pub struct ToolConfig {
     pub system_prompt: String,
     pub skills_dir: PathBuf,
     pub available_skills: Vec<String>,
+    pub db_path: Option<PathBuf>,
 }
 
 /// Register only the tools listed by name.
@@ -54,7 +57,33 @@ pub fn create_registry_for_with_config(
                     registry
                 }
             }
-            "web_fetch" => registry.register(web_fetch::WebFetchTool),
+            "web_fetch" => registry.register(web_fetch::WebFetchTool::default()),
+            "api_keys_check" => {
+                if let Some(cfg) = config {
+                    if let Some(ref db_path) = cfg.db_path {
+                        registry.register(api_keys_check::ApiKeysCheckTool::new(db_path.clone()))
+                    } else {
+                        log::warn!("api_keys_check tool requires db_path in ToolConfig, skipping");
+                        registry
+                    }
+                } else {
+                    log::warn!("api_keys_check tool requires ToolConfig, skipping");
+                    registry
+                }
+            }
+            "install_api_key" => {
+                if let Some(cfg) = config {
+                    if let Some(ref db_path) = cfg.db_path {
+                        registry.register(install_api_key::InstallApiKeyTool::new(db_path.clone()))
+                    } else {
+                        log::warn!("install_api_key tool requires db_path in ToolConfig, skipping");
+                        registry
+                    }
+                } else {
+                    log::warn!("install_api_key tool requires ToolConfig, skipping");
+                    registry
+                }
+            }
             "sub_agent" => {
                 if let Some(cfg) = config {
                     registry.register(sub_agent::SubAgentTool::new(
@@ -74,6 +103,21 @@ pub fn create_registry_for_with_config(
         };
     }
     registry
+}
+
+/// Extract (name, description) pairs from a tool registry.
+/// Data-driven: descriptions come from each Tool's description() method.
+pub fn tool_descriptions_from_registry(registry: &ToolRegistry) -> Vec<(String, String)> {
+    let tools_json = registry.to_openai_tools();
+    let mut descriptions: Vec<(String, String)> = tools_json.iter()
+        .filter_map(|t| {
+            let name = t["function"]["name"].as_str()?.to_string();
+            let desc = t["function"]["description"].as_str()?.to_string();
+            Some((name, desc))
+        })
+        .collect();
+    descriptions.sort_by(|a, b| a.0.cmp(&b.0));
+    descriptions
 }
 
 pub fn truncate_output(s: &str, max_chars: usize) -> String {

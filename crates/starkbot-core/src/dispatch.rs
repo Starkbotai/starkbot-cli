@@ -1,7 +1,8 @@
 use metalcraft::{create_react_agent_with_hooks, AgentState, Executor, RunOutcome};
 use rig::client::CompletionClient;
 use rig::providers::openai;
-use std::path::Path;
+use starkbot_skills::SkillRegistry;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::persona::Persona;
@@ -28,15 +29,44 @@ impl AgentRunner {
         model_name: &str,
         approval_mode: ApprovalMode,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let system_prompt = persona.build_system_prompt(skills_dir, cwd);
+        Self::build_with_db(persona, skills_dir, cwd, api_key, model_name, approval_mode, None)
+    }
+
+    /// Build an agent runner with optional database path for API key tools.
+    pub fn build_with_db(
+        persona: &Persona,
+        skills_dir: &Path,
+        cwd: &str,
+        api_key: &str,
+        model_name: &str,
+        approval_mode: ApprovalMode,
+        db_path: Option<PathBuf>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        // Load skill registry for tag-based discovery
+        let skill_registry = SkillRegistry::load_from_dir(skills_dir);
+        let skills = persona.resolved_skills(&skill_registry);
+        // Skills enable their required tools (data-driven from skill frontmatter)
+        let tools = persona.resolved_tools_with_skills(&skill_registry);
+
+        // Build tool registry first (data-driven: descriptions live on each Tool impl)
         let tool_config = starkbot_tools::ToolConfig {
             api_key: api_key.to_string(),
             model_name: model_name.to_string(),
-            system_prompt: system_prompt.clone(),
+            system_prompt: String::new(), // placeholder — we'll set real prompt after
             skills_dir: skills_dir.to_path_buf(),
-            available_skills: persona.skills.clone(),
+            available_skills: skills,
+            db_path,
         };
-        let registry = starkbot_tools::create_registry_for_with_config(&persona.tools, Some(&tool_config));
+        let registry = starkbot_tools::create_registry_for_with_config(&tools, Some(&tool_config));
+
+        // Extract tool descriptions from the actual registry (data-driven)
+        let tool_descriptions = starkbot_tools::tool_descriptions_from_registry(&registry);
+
+        // Build system prompt with real tool descriptions and discovered skills
+        let system_prompt = persona.build_system_prompt_with_registry(
+            skills_dir, cwd, &skill_registry, &tool_descriptions,
+        );
+
         let client = openai::Client::new(api_key)?;
         let model = client.completion_model(model_name);
         let hook = approval::build_hook(approval_mode);

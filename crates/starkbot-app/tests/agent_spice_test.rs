@@ -36,9 +36,10 @@ impl AgentUnderTest for StarkBotAgent {
             model_name: model_name.clone(),
             system_prompt: system_prompt.clone(),
             skills_dir: skills_dir.clone(),
-            available_skills: persona.skills.clone(),
+            available_skills: persona.skills_list(),
+            db_path: None,
         };
-        let registry = starkbot_tools::create_registry_for_with_config(&persona.tools, Some(&tool_config));
+        let registry = starkbot_tools::create_registry_for_with_config(&persona.tools(), Some(&tool_config));
 
         // Build approval hook that denies specified tools
         let hook = if denied_tools.is_empty() {
@@ -82,7 +83,7 @@ impl AgentUnderTest for StarkBotAgent {
     fn available_tools(&self, _config: &AgentConfig) -> Vec<String> {
         let personas_dir = std::path::PathBuf::from("personas");
         match starkbot_core::persona::Persona::load(&self.persona_slug, &personas_dir) {
-            Ok(p) => p.tools,
+            Ok(p) => p.tools(),
             Err(_) => vec![],
         }
     }

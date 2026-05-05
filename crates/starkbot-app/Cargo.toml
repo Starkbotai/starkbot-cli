@@ -26,6 +26,7 @@ dotenvy = { workspace = true }
 chrono = { workspace = true }
 crossterm = { workspace = true }
 ratatui = { workspace = true }
+dirs = { workspace = true }
 
 [dev-dependencies]
 spice-framework = { workspace = true }

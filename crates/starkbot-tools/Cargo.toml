@@ -8,6 +8,7 @@ metalcraft = { workspace = true }
 rig = { workspace = true }
 starkbot-skills = { path = "../starkbot-skills" }
 starkbot-memory = { path = "../starkbot-memory" }
+starkbot-db = { path = "../starkbot-db" }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }

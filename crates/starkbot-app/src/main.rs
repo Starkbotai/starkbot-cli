@@ -7,11 +7,13 @@ use ratatui::Terminal;
 use starkbot_core::context;
 use starkbot_core::dispatch::AgentRunner;
 use starkbot_core::persona::Persona;
+use starkbot_db::Database;
 use starkbot_graph::build_skill_graph;
 use starkbot_skills::SkillRegistry;
 use starkbot_tools::approval::ApprovalMode;
 use starkbot_tui::{draw, handle_key, TuiState};
 use std::io;
+use std::path::PathBuf;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -20,6 +22,14 @@ enum AgentEvent {
     ToolResult(String, bool, String),
     Done(String),
     Error(String),
+}
+
+fn default_db_path() -> PathBuf {
+    let data_dir = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("starkbot");
+    std::fs::create_dir_all(&data_dir).ok();
+    data_dir.join("starkbot.db")
 }
 
 #[tokio::main]
@@ -62,13 +72,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| ".".to_string());
 
+    let db_path = default_db_path();
+
+    // Initialize DB on startup (ensures tables exist)
+    let _db = Database::open(&db_path)?;
+
+    // Populate skill FTS index
+    {
+        let db = Database::open(&db_path)?;
+        let skill_registry = SkillRegistry::load_from_dir(&skills_dir);
+        for skill in skill_registry.all() {
+            db.upsert_skill_fts(
+                &skill.name,
+                &skill.description,
+                &skill.tags.join(" "),
+                &skill.content,
+            ).ok();
+        }
+    }
+
     // One-shot mode: no TUI, just run and print
     if let Some(task) = one_shot_task {
-        return run_oneshot(&persona, &skills_dir, &cwd, &api_key, &model_name, approval_mode, &task).await;
+        return run_oneshot(&persona, &skills_dir, &cwd, &api_key, &model_name, approval_mode, &task, &db_path).await;
     }
 
     // TUI mode
-    let runner = AgentRunner::build(&persona, &skills_dir, &cwd, &api_key, &model_name, approval_mode)?;
+    let runner = AgentRunner::build_with_db(&persona, &skills_dir, &cwd, &api_key, &model_name, approval_mode, Some(db_path.clone()))?;
 
     // Load skills for the graph
     let skill_registry = SkillRegistry::load_from_dir(&skills_dir);
@@ -77,11 +106,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect();
     let skill_graph = build_skill_graph(&skill_data);
 
-    let mut tui_state = TuiState::new(&persona.name, &model_name);
+    let mut tui_state = TuiState::new(persona.name(), &model_name);
     tui_state.skill_names = skill_registry.names().into_iter().map(String::from).collect();
+    tui_state.skills = {
+        let mut skills: Vec<_> = skill_registry.all().into_iter().cloned().collect();
+        skills.sort_by(|a, b| a.name.cmp(&b.name));
+        skills
+    };
     tui_state.skill_graph = skill_graph;
+
+    // Load API keys for TUI tab
+    {
+        let db = Database::open(&db_path)?;
+        tui_state.api_keys = db.list_api_keys().unwrap_or_default();
+    }
+    tui_state.db_path = Some(db_path.clone());
+
     tui_state.add_message("assistant", &format!(
-        "Hello! I'm {} - {}. How can I help?", persona.name, persona.description
+        "Hello! I'm {} - {}. How can I help?", persona.name(), persona.description
     ));
 
     // Setup terminal
@@ -123,6 +165,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
+
+        // Handle TUI-level actions (e.g., API key add/delete)
+        handle_tui_actions(&mut tui_state);
 
         // Handle input
         if event::poll(Duration::from_millis(50))? {
@@ -197,6 +242,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn handle_tui_actions(state: &mut TuiState) {
+    if let Some(action) = state.pending_action.take() {
+        match action {
+            starkbot_tui::TuiAction::AddApiKey { name, key } => {
+                if let Some(ref db_path) = state.db_path {
+                    if let Ok(db) = Database::open(db_path) {
+                        if db.upsert_api_key(&name, &key).is_ok() {
+                            state.api_keys = db.list_api_keys().unwrap_or_default();
+                            state.add_message("assistant", &format!("API key {} installed.", name));
+                        }
+                    }
+                }
+            }
+            starkbot_tui::TuiAction::DeleteApiKey { name } => {
+                if let Some(ref db_path) = state.db_path {
+                    if let Ok(db) = Database::open(db_path) {
+                        if db.delete_api_key(&name).unwrap_or(false) {
+                            state.api_keys = db.list_api_keys().unwrap_or_default();
+                            state.add_message("assistant", &format!("API key {} deleted.", name));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn handle_command(input: &str, state: &mut TuiState, agent_state: &mut Option<AgentState>) {
     match input.trim() {
         "/quit" | "/exit" => state.should_quit = true,
@@ -231,15 +303,16 @@ async fn run_oneshot(
     model_name: &str,
     approval_mode: ApprovalMode,
     task: &str,
+    db_path: &std::path::Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("╭─────────────────────────────────────────────╮");
     println!("│  StarkBot CLI                                │");
-    println!("│  Persona: {:<33}│", persona.name);
+    println!("│  Persona: {:<33}│", persona.name());
     println!("│  Model:   {:<33}│", model_name);
     println!("╰─────────────────────────────────────────────╯");
     println!("\nTask: {}\n", task);
 
-    let runner = AgentRunner::build(persona, skills_dir, cwd, api_key, model_name, approval_mode)?;
+    let runner = AgentRunner::build_with_db(persona, skills_dir, cwd, api_key, model_name, approval_mode, Some(db_path.to_path_buf()))?;
     let state = AgentState::new(task);
 
     match runner.run(state).await? {

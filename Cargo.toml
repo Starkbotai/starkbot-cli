@@ -47,6 +47,9 @@ dotenvy = "0.15"
 reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
 htmd = "0.1"
 
+# Platform
+dirs = "6"
+
 # Testing
 spice-framework = "0.1"
 

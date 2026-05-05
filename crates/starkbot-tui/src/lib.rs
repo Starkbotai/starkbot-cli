@@ -9,6 +9,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Tabs, Wrap};
 
 use starkbot_graph::{GraphData, GraphWidget, Viewport};
+use starkbot_skills::Skill;
+
+use std::path::PathBuf;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum ActiveView {
@@ -16,11 +19,12 @@ pub enum ActiveView {
     Skills,
     Graph,
     Memory,
+    ApiKeys,
 }
 
 impl ActiveView {
     pub fn titles() -> Vec<&'static str> {
-        vec!["Chat", "Skills", "Graph", "Memory"]
+        vec!["Chat", "Skills", "Graph", "Memory", "API Keys"]
     }
 
     pub fn index(&self) -> usize {
@@ -29,6 +33,7 @@ impl ActiveView {
             Self::Skills => 1,
             Self::Graph => 2,
             Self::Memory => 3,
+            Self::ApiKeys => 4,
         }
     }
 
@@ -37,13 +42,20 @@ impl ActiveView {
             1 => Self::Skills,
             2 => Self::Graph,
             3 => Self::Memory,
+            4 => Self::ApiKeys,
             _ => Self::Chat,
         }
     }
 
     pub fn next(&self) -> Self {
-        Self::from_index((self.index() + 1) % 4)
+        Self::from_index((self.index() + 1) % 5)
     }
+}
+
+/// Actions the TUI requests the app to perform (e.g., DB writes).
+pub enum TuiAction {
+    AddApiKey { name: String, key: String },
+    DeleteApiKey { name: String },
 }
 
 /// A chat message in the TUI.
@@ -51,6 +63,14 @@ impl ActiveView {
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
+}
+
+/// Input mode for API keys add flow.
+#[derive(Clone, Copy, PartialEq)]
+enum ApiKeyInputMode {
+    Normal,
+    EnteringName,
+    EnteringKey,
 }
 
 /// TUI application state.
@@ -66,9 +86,19 @@ pub struct TuiState {
     pub skill_graph: GraphData,
     pub graph_viewport: Viewport,
     pub skill_names: Vec<String>,
+    pub skills: Vec<Skill>,
     pub selected_skill: usize,
     pub should_quit: bool,
     pub agent_busy: bool,
+    // API keys state
+    pub api_keys: Vec<(String, String, String)>, // (name, masked_key, updated_at)
+    pub selected_api_key: usize,
+    pub db_path: Option<PathBuf>,
+    pub pending_action: Option<TuiAction>,
+    // API key add flow
+    api_key_input_mode: ApiKeyInputMode,
+    api_key_name_input: String,
+    api_key_value_input: String,
 }
 
 impl TuiState {
@@ -85,9 +115,17 @@ impl TuiState {
             skill_graph: GraphData::default(),
             graph_viewport: Viewport::default(),
             skill_names: vec![],
+            skills: vec![],
             selected_skill: 0,
             should_quit: false,
             agent_busy: false,
+            api_keys: vec![],
+            selected_api_key: 0,
+            db_path: None,
+            pending_action: None,
+            api_key_input_mode: ApiKeyInputMode::Normal,
+            api_key_name_input: String::new(),
+            api_key_value_input: String::new(),
         }
     }
 
@@ -119,6 +157,7 @@ pub fn handle_key(state: &mut TuiState, key: KeyEvent) -> Option<String> {
         ActiveView::Skills => { handle_skills_key(state, key); None }
         ActiveView::Graph => { handle_graph_key(state, key); None }
         ActiveView::Memory => { handle_memory_key(state, key); None }
+        ActiveView::ApiKeys => { handle_api_keys_key(state, key); None }
     }
 }
 
@@ -189,6 +228,82 @@ fn handle_memory_key(state: &mut TuiState, key: KeyEvent) {
     }
 }
 
+fn handle_api_keys_key(state: &mut TuiState, key: KeyEvent) {
+    match state.api_key_input_mode {
+        ApiKeyInputMode::Normal => {
+            match key.code {
+                KeyCode::Tab => state.active_view = state.active_view.next(),
+                KeyCode::Up | KeyCode::Char('k') => {
+                    state.selected_api_key = state.selected_api_key.saturating_sub(1);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    if !state.api_keys.is_empty() {
+                        state.selected_api_key = (state.selected_api_key + 1).min(state.api_keys.len() - 1);
+                    }
+                }
+                KeyCode::Char('a') => {
+                    state.api_key_input_mode = ApiKeyInputMode::EnteringName;
+                    state.api_key_name_input.clear();
+                    state.api_key_value_input.clear();
+                }
+                KeyCode::Char('d') => {
+                    if state.selected_api_key < state.api_keys.len() {
+                        let name = state.api_keys[state.selected_api_key].0.clone();
+                        state.pending_action = Some(TuiAction::DeleteApiKey { name });
+                        if state.selected_api_key > 0 {
+                            state.selected_api_key -= 1;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        ApiKeyInputMode::EnteringName => {
+            match key.code {
+                KeyCode::Esc => {
+                    state.api_key_input_mode = ApiKeyInputMode::Normal;
+                }
+                KeyCode::Enter => {
+                    if !state.api_key_name_input.is_empty() {
+                        state.api_key_input_mode = ApiKeyInputMode::EnteringKey;
+                    }
+                }
+                KeyCode::Char(c) => {
+                    state.api_key_name_input.push(c.to_ascii_uppercase());
+                }
+                KeyCode::Backspace => {
+                    state.api_key_name_input.pop();
+                }
+                _ => {}
+            }
+        }
+        ApiKeyInputMode::EnteringKey => {
+            match key.code {
+                KeyCode::Esc => {
+                    state.api_key_input_mode = ApiKeyInputMode::Normal;
+                }
+                KeyCode::Enter => {
+                    if !state.api_key_value_input.is_empty() {
+                        let name = state.api_key_name_input.clone();
+                        let key = state.api_key_value_input.clone();
+                        state.pending_action = Some(TuiAction::AddApiKey { name, key });
+                        state.api_key_input_mode = ApiKeyInputMode::Normal;
+                        state.api_key_name_input.clear();
+                        state.api_key_value_input.clear();
+                    }
+                }
+                KeyCode::Char(c) => {
+                    state.api_key_value_input.push(c);
+                }
+                KeyCode::Backspace => {
+                    state.api_key_value_input.pop();
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 /// Draw the full TUI frame.
 pub fn draw(frame: &mut ratatui::Frame, state: &TuiState) {
     let chunks = Layout::default()
@@ -215,6 +330,7 @@ pub fn draw(frame: &mut ratatui::Frame, state: &TuiState) {
         ActiveView::Skills => draw_skills(frame, state, chunks[1]),
         ActiveView::Graph => draw_graph(frame, state, chunks[1]),
         ActiveView::Memory => draw_memory(frame, state, chunks[1]),
+        ActiveView::ApiKeys => draw_api_keys(frame, state, chunks[1]),
     }
 
     // Status bar
@@ -316,16 +432,38 @@ fn draw_skills(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
         .block(Block::default().borders(Borders::ALL).title(" Skills "));
     frame.render_widget(list, chunks[0]);
 
-    // Skill detail (placeholder)
-    let detail_text = if state.skill_names.is_empty() {
+    // Skill detail
+    let detail_text = if state.skills.is_empty() {
         "No skills loaded".to_string()
-    } else if state.selected_skill < state.skill_names.len() {
-        format!("Selected: {}\n\nUse ↑↓ to navigate", state.skill_names[state.selected_skill])
+    } else if state.selected_skill < state.skills.len() {
+        let skill = &state.skills[state.selected_skill];
+        let mut text = format!("# {}\n", skill.name);
+        if !skill.description.is_empty() {
+            text.push_str(&format!("{}\n", skill.description));
+        }
+        text.push('\n');
+        if !skill.version.is_empty() {
+            text.push_str(&format!("Version: {}\n", skill.version));
+        }
+        if !skill.tags.is_empty() {
+            text.push_str(&format!("Tags: {}\n", skill.tags.join(", ")));
+        }
+        if !skill.requires_tools.is_empty() {
+            text.push_str(&format!("Tools: {}\n", skill.requires_tools.join(", ")));
+        }
+        text.push_str("\n─────────────────────────────────\n\n");
+        text.push_str(&skill.content);
+        text
     } else {
         String::new()
     };
+    let detail_title = if state.selected_skill < state.skills.len() {
+        format!(" {} ", state.skills[state.selected_skill].name)
+    } else {
+        " Detail ".to_string()
+    };
     let detail = Paragraph::new(detail_text)
-        .block(Block::default().borders(Borders::ALL).title(" Detail "))
+        .block(Block::default().borders(Borders::ALL).title(detail_title))
         .wrap(Wrap { trim: false });
     frame.render_widget(detail, chunks[1]);
 }
@@ -342,4 +480,97 @@ fn draw_memory(frame: &mut ratatui::Frame, _state: &TuiState, area: Rect) {
         .block(Block::default().borders(Borders::ALL).title(" Memory "))
         .wrap(Wrap { trim: false });
     frame.render_widget(placeholder, area);
+}
+
+fn draw_api_keys(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .split(area);
+
+    // Left panel: key list
+    let mut items: Vec<Line> = vec![];
+    if state.api_keys.is_empty() {
+        items.push(Line::from(Span::styled(
+            "  No API keys configured", Style::default().fg(Color::DarkGray),
+        )));
+        items.push(Line::from(Span::styled(
+            "  Press 'a' to add one", Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        for (i, (name, masked, _)) in state.api_keys.iter().enumerate() {
+            let style = if i == state.selected_api_key {
+                Style::default().fg(Color::Cyan).bold()
+            } else {
+                Style::default()
+            };
+            let marker = if i == state.selected_api_key { "▸ " } else { "  " };
+            items.push(Line::from(vec![
+                Span::styled(format!("{}{}", marker, name), style),
+                Span::styled(format!("  {}", masked), Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+    }
+    let list = Paragraph::new(items)
+        .block(Block::default().borders(Borders::ALL).title(" API Keys "));
+    frame.render_widget(list, chunks[0]);
+
+    // Right panel: detail + input form
+    let mut detail_lines: Vec<Line> = vec![];
+
+    match state.api_key_input_mode {
+        ApiKeyInputMode::Normal => {
+            if state.selected_api_key < state.api_keys.len() {
+                let (name, masked, updated) = &state.api_keys[state.selected_api_key];
+                detail_lines.push(Line::from(Span::styled(format!(" Service: {}", name), Style::default().fg(Color::White).bold())));
+                detail_lines.push(Line::from(Span::styled(format!(" Key:     {}", masked), Style::default().fg(Color::Yellow))));
+                detail_lines.push(Line::from(Span::styled(format!(" Updated: {}", updated), Style::default().fg(Color::DarkGray))));
+                detail_lines.push(Line::from(""));
+            }
+            detail_lines.push(Line::from(Span::styled(" Shortcuts:", Style::default().fg(Color::Cyan))));
+            detail_lines.push(Line::from("   a - Add new key"));
+            detail_lines.push(Line::from("   d - Delete selected key"));
+            detail_lines.push(Line::from("   j/k - Navigate"));
+            detail_lines.push(Line::from("   Tab - Switch view"));
+        }
+        ApiKeyInputMode::EnteringName => {
+            detail_lines.push(Line::from(Span::styled(" Add API Key", Style::default().fg(Color::Cyan).bold())));
+            detail_lines.push(Line::from(""));
+            detail_lines.push(Line::from(vec![
+                Span::styled(" Service name: ", Style::default().fg(Color::Yellow)),
+                Span::styled(&state.api_key_name_input, Style::default().fg(Color::White).bold()),
+                Span::styled("_", Style::default().fg(Color::White)),
+            ]));
+            detail_lines.push(Line::from(""));
+            detail_lines.push(Line::from(Span::styled(
+                " Use UPPER_SNAKE_CASE (e.g. CLOUDFLARE_API_TOKEN)", Style::default().fg(Color::DarkGray),
+            )));
+            detail_lines.push(Line::from(Span::styled(" Enter: next │ Esc: cancel", Style::default().fg(Color::DarkGray))));
+        }
+        ApiKeyInputMode::EnteringKey => {
+            detail_lines.push(Line::from(Span::styled(" Add API Key", Style::default().fg(Color::Cyan).bold())));
+            detail_lines.push(Line::from(""));
+            detail_lines.push(Line::from(vec![
+                Span::styled(" Service: ", Style::default().fg(Color::DarkGray)),
+                Span::raw(&state.api_key_name_input),
+            ]));
+            let display_key = if state.api_key_value_input.len() > 4 {
+                format!("{}...", &state.api_key_value_input[..4])
+            } else {
+                state.api_key_value_input.clone()
+            };
+            detail_lines.push(Line::from(vec![
+                Span::styled(" API key: ", Style::default().fg(Color::Yellow)),
+                Span::styled(display_key, Style::default().fg(Color::White).bold()),
+                Span::styled("_", Style::default().fg(Color::White)),
+            ]));
+            detail_lines.push(Line::from(""));
+            detail_lines.push(Line::from(Span::styled(" Enter: save │ Esc: cancel", Style::default().fg(Color::DarkGray))));
+        }
+    }
+
+    let detail = Paragraph::new(detail_lines)
+        .block(Block::default().borders(Borders::ALL).title(" Details "))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(detail, chunks[1]);
 }

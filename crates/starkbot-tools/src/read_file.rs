@@ -17,7 +17,7 @@ impl metalcraft::Tool for ReadFileTool {
                 "start_line": { "type": "integer", "description": "First line to read (1-based, inclusive)" },
                 "end_line": { "type": "integer", "description": "Last line to read (1-based, inclusive)" }
             },
-            "required": ["path"]
+            "required": ["path", "start_line", "end_line"]
         })
     }
     async fn call(&self, args: serde_json::Value) -> metalcraft::Result<serde_json::Value> {

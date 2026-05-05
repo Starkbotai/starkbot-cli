@@ -26,7 +26,7 @@ pub enum ApprovalMode {
 
 impl ApprovalMode {
     pub fn default_interactive() -> Self {
-        let auto = ["read_file", "list_files", "grep", "find_files", "load_skill"]
+        let auto = ["read_file", "list_files", "grep", "find_files", "load_skill", "api_keys_check"]
             .into_iter()
             .map(String::from)
             .collect();

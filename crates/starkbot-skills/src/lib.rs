@@ -1,3 +1,5 @@
+pub mod rag;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -37,6 +39,11 @@ impl SkillRegistry {
             skills,
             skills_dir: dir.to_path_buf(),
         }
+    }
+
+    /// Create a registry from a pre-built map (useful for testing).
+    pub fn from_map(skills: HashMap<String, Skill>, skills_dir: PathBuf) -> Self {
+        Self { skills, skills_dir }
     }
 
     pub fn get(&self, name: &str) -> Option<&Skill> {

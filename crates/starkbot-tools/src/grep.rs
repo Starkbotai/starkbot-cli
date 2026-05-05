@@ -19,7 +19,7 @@ impl metalcraft::Tool for GrepTool {
                 "path": { "type": "string", "description": "File or directory to search in" },
                 "include": { "type": "string", "description": "File extension filter, e.g. 'rs' or 'py'" }
             },
-            "required": ["pattern", "path"]
+            "required": ["pattern", "path", "include"]
         })
     }
     async fn call(&self, args: serde_json::Value) -> metalcraft::Result<serde_json::Value> {

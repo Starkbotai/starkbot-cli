@@ -26,7 +26,7 @@ impl metalcraft::Tool for BashTool {
                     "description": "Maximum execution time in seconds (default 60, max 300)"
                 }
             },
-            "required": ["command"]
+            "required": ["command", "timeout_secs"]
         })
     }
     async fn call(&self, args: serde_json::Value) -> metalcraft::Result<serde_json::Value> {

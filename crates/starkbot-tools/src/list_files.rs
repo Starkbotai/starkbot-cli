@@ -16,7 +16,7 @@ impl metalcraft::Tool for ListFilesTool {
                 "path": { "type": "string", "description": "Directory path to list" },
                 "recursive": { "type": "boolean", "description": "List recursively (default false, max depth 3)" }
             },
-            "required": ["path"]
+            "required": ["path", "recursive"]
         })
     }
     async fn call(&self, args: serde_json::Value) -> metalcraft::Result<serde_json::Value> {
