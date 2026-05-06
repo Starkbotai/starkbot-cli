@@ -17,6 +17,15 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
+fn debug_log(msg: impl Into<String>) -> BackendEvent {
+    let now = chrono::Local::now();
+    BackendEvent::DebugLog {
+        timestamp: now.format("%H:%M:%S%.3f").to_string(),
+        level: "INFO".to_string(),
+        message: msg.into(),
+    }
+}
+
 /// Shared state for pending approval response channels.
 /// The approval poller inserts entries, the command handler removes them.
 type PendingApprovals = Arc<Mutex<HashMap<String, std::sync::mpsc::SyncSender<bool>>>>;
@@ -328,6 +337,7 @@ impl crate::backend::Backend for StarkbotEngine {
             };
 
             let mut agent_event_rx: Option<mpsc::UnboundedReceiver<BackendEvent>> = None;
+            let mut state_rx: Option<tokio::sync::oneshot::Receiver<AgentState>> = None;
 
             loop {
                 tokio::select! {
@@ -337,11 +347,18 @@ impl crate::backend::Backend for StarkbotEngine {
 
                         match cmd {
                             FrontendCommand::SendMessage { content } => {
+                                log::info!("[engine] SendMessage received: {:?}", truncate_str(&content, 50));
+                                let _ = event_tx.send(debug_log(format!("SendMessage: {}", truncate_str(&content, 50))));
+
                                 if agent_busy {
+                                    log::info!("[engine] Agent busy, ignoring message");
+                                    let _ = event_tx.send(debug_log("Agent busy, message ignored"));
                                     continue;
                                 }
 
                                 if content.starts_with('/') {
+                                    log::info!("[engine] Slash command: {}", &content);
+                                    let _ = event_tx.send(debug_log(format!("Slash command: {}", &content)));
                                     handle_slash_command(&content, &mut messages, &mut tool_activity, &mut agent_state, &event_tx);
                                     continue;
                                 }
@@ -351,8 +368,16 @@ impl crate::backend::Backend for StarkbotEngine {
                                 agent_busy = true;
 
                                 let turn_state = match agent_state.take() {
-                                    Some(prev) => prev.continue_with(&content),
-                                    None => AgentState::new(&content),
+                                    Some(prev) => {
+                                        log::info!("[engine] Continuing conversation ({} prior messages)", prev.messages.len());
+                                        let _ = event_tx.send(debug_log(format!("Continuing conversation ({} prior msgs)", prev.messages.len())));
+                                        prev.continue_with(&content)
+                                    }
+                                    None => {
+                                        log::info!("[engine] New conversation");
+                                        let _ = event_tx.send(debug_log("Starting new conversation"));
+                                        AgentState::new(&content)
+                                    }
                                 };
 
                                 let rg = runner_graph.clone();
@@ -360,13 +385,25 @@ impl crate::backend::Backend for StarkbotEngine {
                                 let (atx, arx) = mpsc::unbounded_channel::<BackendEvent>();
                                 agent_event_rx = Some(arx);
 
+                                let (stx, srx) = tokio::sync::oneshot::channel::<AgentState>();
+                                state_rx = Some(srx);
+
+                                log::info!("[engine] Spawning executor task");
+                                let _ = event_tx.send(debug_log("Spawning executor task"));
+
+                                let dbg_tx = event_tx.clone();
                                 tokio::spawn(async move {
+                                    log::info!("[executor] Starting executor.run()");
+                                    let _ = dbg_tx.send(debug_log("Executor: calling run()"));
+
                                     let executor = metalcraft::Executor::new_from_arc(rg)
                                         .max_steps(100)
                                         .with_step_guard(sg);
 
                                     match executor.run(turn_state, "agent").await {
                                         Ok(RunOutcome::Completed(state)) => {
+                                            log::info!("[executor] Completed with {} messages", state.messages.len());
+                                            let _ = dbg_tx.send(debug_log(format!("Executor completed: {} messages", state.messages.len())));
                                             for msg in &state.messages {
                                                 match msg {
                                                     AgentMessage::ToolCall { name, args, .. } => {
@@ -382,11 +419,16 @@ impl crate::backend::Backend for StarkbotEngine {
                                             }
                                             let answer = state.final_answer().unwrap_or("(no answer)").to_string();
                                             let _ = atx.send(BackendEvent::TurnComplete { answer });
+                                            let _ = stx.send(state);
                                         }
                                         Ok(RunOutcome::Interrupted { reason, .. }) => {
+                                            log::warn!("[executor] Interrupted: {}", reason);
+                                            let _ = dbg_tx.send(debug_log(format!("Executor interrupted: {}", reason)));
                                             let _ = atx.send(BackendEvent::Error { message: format!("Interrupted: {}", reason) });
                                         }
                                         Err(e) => {
+                                            log::error!("[executor] Error: {}", e);
+                                            let _ = dbg_tx.send(debug_log(format!("Executor error: {}", e)));
                                             let _ = atx.send(BackendEvent::Error { message: format!("Error: {}", e) });
                                         }
                                     }
@@ -496,6 +538,8 @@ impl crate::backend::Backend for StarkbotEngine {
                             // Update internal state
                             match &evt {
                                 BackendEvent::ToolCall { name, args } => {
+                                    log::info!("[engine] Agent event: ToolCall {}", name);
+                                    let _ = event_tx.send(debug_log(format!("Agent ToolCall: {}", name)));
                                     let activity = format!("▶ {} {}", name, args);
                                     tool_activity.push(activity);
                                     if tool_activity.len() > 20 { tool_activity.remove(0); }
@@ -505,6 +549,8 @@ impl crate::backend::Backend for StarkbotEngine {
                                     });
                                 }
                                 BackendEvent::ToolResult { name, success, preview } => {
+                                    log::info!("[engine] Agent event: ToolResult {} success={}", name, success);
+                                    let _ = event_tx.send(debug_log(format!("Agent ToolResult: {} ok={}", name, success)));
                                     let icon = if *success { "✓" } else { "✗" };
                                     let activity = format!("{} {}", icon, name);
                                     tool_activity.push(activity);
@@ -517,14 +563,32 @@ impl crate::backend::Backend for StarkbotEngine {
                                     }
                                 }
                                 BackendEvent::TurnComplete { answer } => {
+                                    log::info!("[engine] Agent event: TurnComplete ({} chars)", answer.len());
+                                    let _ = event_tx.send(debug_log(format!("TurnComplete: {} chars", answer.len())));
                                     agent_busy = false;
+                                    // Restore agent state for conversation continuity
+                                    if let Some(mut rx) = state_rx.take() {
+                                        match rx.try_recv() {
+                                            Ok(s) => {
+                                                log::info!("[engine] Agent state restored ({} messages)", s.messages.len());
+                                                let _ = event_tx.send(debug_log(format!("State restored: {} msgs", s.messages.len())));
+                                                agent_state = Some(s);
+                                            }
+                                            Err(_) => {
+                                                log::warn!("[engine] Could not restore agent state");
+                                                let _ = event_tx.send(debug_log("WARNING: agent state not available"));
+                                            }
+                                        }
+                                    }
                                     messages.push(ChatMessageDto {
                                         role: "assistant".to_string(),
                                         content: answer.clone(),
                                     });
                                     emit(&BackendEvent::StatusUpdate { busy: false, message: "Ready".to_string() });
                                 }
-                                BackendEvent::Error { .. } => {
+                                BackendEvent::Error { message } => {
+                                    log::error!("[engine] Agent event: Error: {}", message);
+                                    let _ = event_tx.send(debug_log(format!("Agent Error: {}", message)));
                                     agent_busy = false;
                                     emit(&BackendEvent::StatusUpdate { busy: false, message: "Ready".to_string() });
                                 }
@@ -532,12 +596,18 @@ impl crate::backend::Backend for StarkbotEngine {
                             }
                             // Forward to frontend
                             let _ = event_tx.send(evt);
+                        } else {
+                            log::info!("[engine] Agent event channel closed");
+                            let _ = event_tx.send(debug_log("Agent event channel closed (executor done)"));
+                            agent_event_rx = None;
                         }
                     }
 
                     // Poll approval channel (sync -> async bridge)
                     _ = tokio::time::sleep(std::time::Duration::from_millis(16)) => {
                         while let Ok((request, resp_tx)) = approval_rx.try_recv() {
+                            log::info!("[engine] Approval request: {}", request.tool_name);
+                            let _ = event_tx.send(debug_log(format!("Approval request: {}", request.tool_name)));
                             let request_id = {
                                 let mut counter = approval_counter.lock().unwrap();
                                 *counter += 1;

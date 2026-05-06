@@ -9,6 +9,12 @@ interface PendingApproval {
   args_display: string;
 }
 
+export interface DebugLogEntry {
+  timestamp: string;
+  level: string;
+  message: string;
+}
+
 interface BackendState {
   messages: ChatMessage[];
   agentBusy: boolean;
@@ -18,6 +24,7 @@ interface BackendState {
   modelName: string;
   pendingApproval: PendingApproval | null;
   snapshot: AppSnapshot | null;
+  debugLogs: DebugLogEntry[];
 }
 
 export function useBackend() {
@@ -30,6 +37,7 @@ export function useBackend() {
     modelName: "",
     pendingApproval: null,
     snapshot: null,
+    debugLogs: [],
   });
 
   const messagesRef = useRef(state.messages);
@@ -74,9 +82,16 @@ export function useBackend() {
 
   // Listen for backend events
   useEffect(() => {
-    const unlisten = listen<string>("backend-event", (event) => {
-      const evt: BackendEvent = JSON.parse(event.payload);
-      applyEvent(evt);
+    const unlisten = listen<BackendEvent>("backend-event", (event) => {
+      try {
+        // Tauri 2 deserializes the payload for us (Rust Serialize -> JS object)
+        const evt: BackendEvent = typeof event.payload === "string"
+          ? JSON.parse(event.payload)
+          : event.payload;
+        applyEvent(evt);
+      } catch (e) {
+        console.error("[useBackend] event error:", e, event.payload);
+      }
     });
 
     return () => {
@@ -146,6 +161,11 @@ export function useBackend() {
           ...prev,
           messages: [...prev.messages, { role: "assistant", content: evt.Info.message }],
         };
+      }
+      if ("DebugLog" in evt) {
+        const entry = evt.DebugLog;
+        const newLogs = [...prev.debugLogs, entry].slice(-200);
+        return { ...prev, debugLogs: newLogs };
       }
       return prev;
     });

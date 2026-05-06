@@ -21,6 +21,8 @@ pub enum BackendEvent {
     Info { message: String },
     /// Snapshot of current app state (response to RequestSnapshot).
     Snapshot(Box<crate::types::AppSnapshot>),
+    /// Debug log entry for frontends to display.
+    DebugLog { timestamp: String, level: String, message: String },
 }
 
 /// Commands sent from any frontend to the engine.

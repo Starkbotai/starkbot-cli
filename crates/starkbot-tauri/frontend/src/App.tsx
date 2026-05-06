@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useBackend } from "./hooks/useBackend";
 import ChatView from "./components/ChatView";
 import SkillsView from "./components/SkillsView";
@@ -18,7 +18,15 @@ const TABS: { id: View; label: string }[] = [
 
 export default function App() {
   const [activeView, setActiveView] = useState<View>("chat");
+  const [showDebug, setShowDebug] = useState(false);
+  const debugEndRef = useRef<HTMLDivElement>(null);
   const backend = useBackend();
+
+  useEffect(() => {
+    if (showDebug && debugEndRef.current) {
+      debugEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [backend.debugLogs, showDebug]);
 
   return (
     <div className="h-screen flex flex-col bg-surface-0">
@@ -64,6 +72,22 @@ export default function App() {
         )}
       </div>
 
+      {/* Debug panel */}
+      {showDebug && (
+        <div className="h-48 border-t border-surface-3 bg-black/80 overflow-y-auto font-mono text-[11px] text-gray-300 px-2 py-1">
+          {backend.debugLogs.map((log, i) => (
+            <div key={i} className="whitespace-nowrap">
+              <span className="text-gray-500">{log.timestamp}</span>{" "}
+              <span className={log.level === "ERROR" ? "text-red-400" : log.level === "WARN" ? "text-yellow-400" : "text-blue-400"}>
+                {log.level}
+              </span>{" "}
+              <span>{log.message}</span>
+            </div>
+          ))}
+          <div ref={debugEndRef} />
+        </div>
+      )}
+
       {/* Status bar */}
       <div className="flex items-center gap-3 px-3 py-1 bg-surface-1 border-t border-surface-3 text-xs">
         <span className={backend.agentBusy ? "text-yellow-400" : "text-green-400"}>
@@ -79,6 +103,15 @@ export default function App() {
             </span>
           </>
         )}
+        <div className="flex-1" />
+        <button
+          onClick={() => setShowDebug(!showDebug)}
+          className={`px-2 py-0.5 rounded text-[10px] ${
+            showDebug ? "bg-accent text-white" : "text-gray-500 hover:text-gray-300 hover:bg-surface-2"
+          }`}
+        >
+          Debug {backend.debugLogs.length > 0 && `(${backend.debugLogs.length})`}
+        </button>
       </div>
     </div>
   );

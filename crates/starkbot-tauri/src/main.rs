@@ -60,8 +60,59 @@ async fn get_initial_snapshot(state: tauri::State<'_, Arc<starkbot_api::types::A
     Ok((**state).clone())
 }
 
+fn setup_logging() {
+    use std::io::Write;
+    use env_logger::Builder;
+    use log::LevelFilter;
+
+    let log_path = dirs::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("starkbot-cli")
+        .join("debug.log");
+
+    // Ensure parent dir exists
+    if let Some(parent) = log_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    // Truncate on startup
+    let log_file = std::fs::File::create(&log_path).ok();
+
+    let log_file = std::sync::Arc::new(std::sync::Mutex::new(log_file));
+
+    Builder::new()
+        .filter_module("starkbot", LevelFilter::Info)
+        .filter_module("metalcraft", LevelFilter::Info)
+        .filter_level(LevelFilter::Warn)
+        .format({
+            let log_file = log_file.clone();
+            move |buf, record| {
+                let line = format!(
+                    "[{} {} {}] {}\n",
+                    chrono::Local::now().format("%H:%M:%S%.3f"),
+                    record.level(),
+                    record.module_path().unwrap_or("?"),
+                    record.args()
+                );
+                // Write to stderr (normal env_logger behavior)
+                let _ = buf.write_all(line.as_bytes());
+                // Also write to file
+                if let Ok(mut guard) = log_file.lock() {
+                    if let Some(ref mut f) = *guard {
+                        let _ = f.write_all(line.as_bytes());
+                        let _ = f.flush();
+                    }
+                }
+                Ok(())
+            }
+        })
+        .init();
+
+    log::info!("Logging initialized, file: {}", log_path.display());
+}
+
 fn main() {
-    env_logger::init();
+    setup_logging();
     dotenvy::dotenv().ok();
 
     let persona_slug = std::env::var("STARKBOT_PERSONA").unwrap_or_else(|_| "starkbot".to_string());
@@ -104,11 +155,15 @@ fn main() {
                 handle.manage(Arc::new(snapshot));
 
                 // Forward backend events to the webview
+                log::info!("[tauri] Starting event forwarding loop");
                 while let Some(event) = event_rx.recv().await {
-                    if let Ok(json) = serde_json::to_string(&event) {
-                        let _ = handle.emit("backend-event", json);
+                    log::info!("[tauri] Emitting: {:?}", format!("{:?}", &event).chars().take(100).collect::<String>());
+                    match handle.emit("backend-event", &event) {
+                        Ok(_) => {}
+                        Err(e) => log::error!("[tauri] emit failed: {}", e),
                     }
                 }
+                log::warn!("[tauri] Event forwarding loop ended (channel closed)");
             });
 
             Ok(())

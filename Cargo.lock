@@ -8552,6 +8552,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "chrono",
  "dirs",
  "log",
  "metalcraft",
@@ -8665,6 +8666,8 @@ dependencies = [
 name = "starkbot-tauri"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "dirs",
  "dotenvy",
  "env_logger",
  "log",

@@ -70,4 +70,5 @@ export type BackendEvent =
   | { ModelChanged: { model: string } }
   | { StatusUpdate: { busy: boolean; message: string } }
   | { Info: { message: string } }
-  | { Snapshot: AppSnapshot };
+  | { Snapshot: AppSnapshot }
+  | { DebugLog: { timestamp: string; level: string; message: string } };
