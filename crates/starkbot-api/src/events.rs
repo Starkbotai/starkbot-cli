@@ -35,6 +35,8 @@ pub enum BackendEvent {
     FlowsListed(Vec<crate::types::FlowSummary>),
     /// Flow logs loaded.
     FlowLogsLoaded(Vec<crate::types::FlowLogEntry>),
+    /// Number of currently running flows changed.
+    FlowRunningCount { count: usize },
 }
 
 /// Commands sent from any frontend to the engine.

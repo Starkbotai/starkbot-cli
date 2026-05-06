@@ -110,6 +110,7 @@ export interface FlowLogEntry {
   flow_name: string;
   action: string;
   detail: string;
+  run_id?: string;
 }
 
 export interface IntegrationPresetInfo {
@@ -162,4 +163,5 @@ export type BackendEvent =
   | { SessionsUpdated: SessionSummary[] }
   | { FlowLoaded: SavedFlow }
   | { FlowsListed: FlowSummary[] }
-  | { FlowLogsLoaded: FlowLogEntry[] };
+  | { FlowLogsLoaded: FlowLogEntry[] }
+  | { FlowRunningCount: { count: number } };

@@ -176,6 +176,17 @@ export default function App() {
             </span>
           </>
         )}
+        {backend.runningFlows > 0 && (
+          <>
+            <span className="text-gray-600">|</span>
+            <button
+              onClick={() => setActiveView("data")}
+              className="text-yellow-400 hover:text-yellow-300 transition-colors"
+            >
+              ⟳ {backend.runningFlows} flow{backend.runningFlows !== 1 ? "s" : ""} running
+            </button>
+          </>
+        )}
         <div className="flex-1" />
         <button
           onClick={() => setShowDebug(!showDebug)}

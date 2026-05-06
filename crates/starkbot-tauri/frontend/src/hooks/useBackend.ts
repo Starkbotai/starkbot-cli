@@ -31,6 +31,7 @@ interface BackendState {
   flowLogs: FlowLogEntry[];
   editingFlow: SavedFlow | null;
   inferenceConfigured: boolean;
+  runningFlows: number;
 }
 
 export function useBackend() {
@@ -50,6 +51,7 @@ export function useBackend() {
     flowLogs: [],
     editingFlow: null,
     inferenceConfigured: false,
+    runningFlows: 0,
   });
 
   const messagesRef = useRef(state.messages);
@@ -194,6 +196,9 @@ export function useBackend() {
       }
       if ("FlowLogsLoaded" in evt) {
         return { ...prev, flowLogs: evt.FlowLogsLoaded };
+      }
+      if ("FlowRunningCount" in evt) {
+        return { ...prev, runningFlows: evt.FlowRunningCount.count };
       }
       if ("Snapshot" in evt) {
         const snapshot = evt.Snapshot;

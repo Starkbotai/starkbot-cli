@@ -397,6 +397,12 @@ impl TuiState {
             BackendEvent::FlowLoaded(_) => {
                 // TUI doesn't open the flow editor (GUI only)
             }
+            BackendEvent::FlowLogsLoaded(_) => {
+                // Flow logs displayed in GUI only
+            }
+            BackendEvent::FlowRunningCount { .. } => {
+                // Running flow count displayed in GUI only
+            }
         }
     }
 
