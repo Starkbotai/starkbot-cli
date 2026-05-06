@@ -36,6 +36,30 @@ sha256sum -c checksums-v0.1.0.sha256
 
 ---
 
+## v0.1.2
+
+**Date:** 2026-05-06
+
+### Highlights
+
+- Tauri GUI is now the default frontend for `cargo run` and release builds
+- Slash commands support in chat
+- Flow editor improvements: deduplicated toolbar buttons, added Run Once
+- Grouped flow logs by run ID with running flows shown in footer
+- Chat hyperlinks now open in OS default browser instead of Tauri webview
+
+### Downloads
+
+| Platform | Architecture | Download |
+|----------|-------------|----------|
+| Linux | x86_64 | `starkbot-v0.1.2-linux-x86_64.tar.gz` |
+| Linux | aarch64 | `starkbot-v0.1.2-linux-aarch64.tar.gz` |
+| Linux | native | `starkbot-v0.1.2-native.tar.gz` |
+
+**Checksums:** `checksums-v0.1.2.sha256`
+
+---
+
 ## v0.1.0
 
 > Initial release
