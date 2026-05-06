@@ -8685,7 +8685,6 @@ dependencies = [
  "dotenvy",
  "env_logger",
  "log",
- "open",
  "serde",
  "serde_json",
  "starkbot-api",
