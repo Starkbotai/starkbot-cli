@@ -121,6 +121,7 @@ export default function App() {
             onLoadFlow={backend.loadFlow}
             onDeleteFlow={backend.deleteFlow}
             onToggleFlowEnabled={backend.toggleFlowEnabled}
+            onRunFlowOnce={backend.runFlowOnce}
             onListFlows={backend.listFlows}
             onClearEditingFlow={backend.clearEditingFlow}
           />

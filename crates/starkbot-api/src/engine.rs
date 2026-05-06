@@ -674,6 +674,22 @@ impl crate::backend::Backend for StarkbotEngine {
                                 let _ = event_tx.send(BackendEvent::FlowsListed(updated));
                             }
 
+                            FrontendCommand::FlowRunOnce { flow_id } => {
+                                if let Some(flow) = schedules::load_flow(&app_config.flows_dir(), &flow_id) {
+                                    schedules::append_flow_log(&app_config.flow_logs_path(), &FlowLogEntry {
+                                        timestamp: chrono::Local::now().to_rfc3339(),
+                                        flow_id: flow.id.clone(),
+                                        flow_name: flow.name.clone(),
+                                        action: "run_once".to_string(),
+                                        detail: String::new(),
+                                    });
+                                    let _ = event_tx.send(BackendEvent::Info { message: format!("Flow '{}' triggered (run once)", flow.name) });
+                                    // TODO: implement actual flow execution
+                                } else {
+                                    let _ = event_tx.send(BackendEvent::Error { message: format!("Flow '{}' not found", flow_id) });
+                                }
+                            }
+
                             FrontendCommand::FlowLogsLoad => {
                                 let logs = schedules::load_flow_logs(&app_config.flow_logs_path());
                                 let _ = event_tx.send(BackendEvent::FlowLogsLoaded(logs));

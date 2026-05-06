@@ -387,24 +387,6 @@ function FlowEditorInner({ flow, onSave, onClose }: FlowEditorProps) {
         </div>
 
         <button
-          onClick={() => addNode("prompt")}
-          className="px-3 py-1 text-xs rounded bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30"
-        >
-          Add Prompt
-        </button>
-        <button
-          onClick={() => addNode("branch")}
-          className="px-3 py-1 text-xs rounded bg-amber-500/20 text-amber-300 hover:bg-amber-500/30"
-        >
-          Add Branch
-        </button>
-        <button
-          onClick={() => addNode("branch_tool")}
-          className="px-3 py-1 text-xs rounded bg-cyan-500/20 text-cyan-300 hover:bg-cyan-500/30"
-        >
-          Add Tool Branch
-        </button>
-        <button
           onClick={handleSave}
           className="px-3 py-1 text-sm rounded bg-accent text-white hover:bg-accent/80"
         >

@@ -70,6 +70,8 @@ pub enum FrontendCommand {
     FlowToggleEnabled { flow_id: String },
     /// Load flow logs.
     FlowLogsLoad,
+    /// Run a flow once immediately.
+    FlowRunOnce { flow_id: String },
     /// List all saved flows.
     FlowList,
     /// Install an integration preset.

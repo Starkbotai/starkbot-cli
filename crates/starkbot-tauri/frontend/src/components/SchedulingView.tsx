@@ -9,6 +9,7 @@ interface Props {
   onLoadFlow: (flowId: string) => void;
   onDeleteFlow: (flowId: string) => void;
   onToggleFlowEnabled: (flowId: string) => void;
+  onRunFlowOnce: (flowId: string) => void;
   onListFlows: () => void;
   onClearEditingFlow: () => void;
 }
@@ -20,6 +21,7 @@ export default function FlowsView({
   onLoadFlow,
   onDeleteFlow,
   onToggleFlowEnabled,
+  onRunFlowOnce,
   onListFlows,
   onClearEditingFlow,
 }: Props) {
@@ -142,6 +144,12 @@ export default function FlowsView({
                 className="px-3 py-1 text-sm rounded bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30"
               >
                 Edit Flow
+              </button>
+              <button
+                onClick={() => onRunFlowOnce(selected.id)}
+                className="px-3 py-1 text-sm rounded bg-cyan-500/20 text-cyan-300 hover:bg-cyan-500/30"
+              >
+                Run Once
               </button>
               <button
                 onClick={() => onToggleFlowEnabled(selected.id)}

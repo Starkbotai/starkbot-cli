@@ -96,6 +96,13 @@ async fn flow_logs_load(state: tauri::State<'_, Arc<AppState>>) -> Result<(), St
         .map_err(|e| format!("Failed to send: {}", e))
 }
 
+/// Tauri command: run a flow once immediately.
+#[tauri::command]
+async fn flow_run_once(flow_id: String, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::FlowRunOnce { flow_id })
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
 /// Tauri command: toggle a flow's enabled state.
 #[tauri::command]
 async fn flow_toggle_enabled(flow_id: String, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
@@ -267,6 +274,7 @@ fn main() {
             flow_load,
             flow_delete,
             flow_list,
+            flow_run_once,
             flow_toggle_enabled,
             flow_logs_load,
             integration_install,

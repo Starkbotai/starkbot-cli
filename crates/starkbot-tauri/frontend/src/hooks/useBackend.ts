@@ -290,6 +290,10 @@ export function useBackend() {
     await invoke("flow_toggle_enabled", { flowId });
   }, []);
 
+  const runFlowOnce = useCallback(async (flowId: string) => {
+    await invoke("flow_run_once", { flowId });
+  }, []);
+
   const loadFlowLogs = useCallback(async () => {
     await invoke("flow_logs_load");
   }, []);
@@ -332,6 +336,7 @@ export function useBackend() {
     deleteFlow,
     listFlows,
     toggleFlowEnabled,
+    runFlowOnce,
     loadFlowLogs,
     slashCommand,
     clearMessages,
