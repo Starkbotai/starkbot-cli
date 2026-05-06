@@ -31,7 +31,7 @@ done
 
 # Auto-detect version from Cargo.toml if not specified
 if [[ -z "$VERSION" ]]; then
-    VERSION=$(grep '^version' crates/starkbot-app/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+    VERSION=$(grep '^version' crates/starkbot-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
 fi
 
 echo "==> Building StarkBot v${VERSION}"
@@ -113,14 +113,14 @@ build_target() {
 
     # Build
     if [[ "$label" == "native" ]]; then
-        cargo build --release -p starkbot-app
+        cargo build --release -p starkbot-tauri
         local bin_dir="target/release"
     else
         local triple="${TARGET_MAP[$label]}"
         if $USE_CROSS; then
-            cross build --release -p starkbot-app --target "$triple"
+            cross build --release -p starkbot-tauri --target "$triple"
         else
-            cargo build --release -p starkbot-app --target "$triple"
+            cargo build --release -p starkbot-tauri --target "$triple"
         fi
         local bin_dir="target/${triple}/release"
     fi
@@ -129,7 +129,7 @@ build_target() {
     rm -rf "$staging_dir"
     mkdir -p "$staging_dir"
 
-    cp "${bin_dir}/starkbot${bin_suffix}" "$staging_dir/"
+    cp "${bin_dir}/starkbot-gui${bin_suffix}" "$staging_dir/"
     cp README.md "$staging_dir/" 2>/dev/null || true
     cp LICENSE* "$staging_dir/" 2>/dev/null || true
 
