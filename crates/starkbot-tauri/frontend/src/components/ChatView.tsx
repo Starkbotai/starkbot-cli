@@ -1,4 +1,8 @@
 import { useState, useRef, useEffect } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import type { ChatMessage } from "../types";
 
 interface PendingApproval {
@@ -38,7 +42,33 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
   return (
     <div className={`rounded-lg border px-4 py-3 ${style}`}>
       <div className={`text-xs font-semibold mb-1 ${label.color}`}>{label.text}</div>
-      <div className="text-sm text-gray-200 whitespace-pre-wrap break-words">{msg.content}</div>
+      <div className="text-sm text-gray-200 prose prose-invert prose-sm max-w-none break-words">
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={{
+            code({ className, children, ...props }) {
+              const match = /language-(\w+)/.exec(className || "");
+              const inline = !match && !String(children).includes("\n");
+              return inline ? (
+                <code className="px-1.5 py-0.5 rounded bg-surface-3 text-accent-light text-xs font-mono" {...props}>
+                  {children}
+                </code>
+              ) : (
+                <SyntaxHighlighter
+                  style={oneDark}
+                  language={match?.[1] || "text"}
+                  PreTag="div"
+                  customStyle={{ margin: "0.5rem 0", borderRadius: "0.5rem", fontSize: "0.75rem" }}
+                >
+                  {String(children).replace(/\n$/, "")}
+                </SyntaxHighlighter>
+              );
+            },
+          }}
+        >
+          {msg.content}
+        </ReactMarkdown>
+      </div>
     </div>
   );
 }
