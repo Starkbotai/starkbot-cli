@@ -1,14 +1,14 @@
 use async_trait::async_trait;
 use std::path::PathBuf;
-use starkbot_db::Database;
+use starkbot_config::keys::KeyStore;
 
 pub struct ApiKeysCheckTool {
-    db_path: PathBuf,
+    keys_path: PathBuf,
 }
 
 impl ApiKeysCheckTool {
-    pub fn new(db_path: PathBuf) -> Self {
-        Self { db_path }
+    pub fn new(keys_path: PathBuf) -> Self {
+        Self { keys_path }
     }
 }
 
@@ -31,34 +31,25 @@ impl metalcraft::Tool for ApiKeysCheckTool {
         })
     }
     async fn call(&self, args: serde_json::Value) -> metalcraft::Result<serde_json::Value> {
-        let db = Database::open(&self.db_path).map_err(|e| metalcraft::GraphError::ToolCallFailed {
+        let store = KeyStore::load(&self.keys_path).map_err(|e| metalcraft::GraphError::ToolCallFailed {
             tool: "api_keys_check".into(),
-            message: format!("Failed to open database: {}", e),
+            message: format!("Failed to load keys: {}", e),
         })?;
 
         let service_name = args["service_name"].as_str().unwrap_or("");
         if !service_name.is_empty() {
-            let name = service_name;
-            let exists = db.get_api_key(name)
-                .map_err(|e| metalcraft::GraphError::ToolCallFailed {
-                    tool: "api_keys_check".into(),
-                    message: format!("DB error: {}", e),
-                })?
-                .is_some();
+            let exists = store.contains(service_name);
             Ok(serde_json::json!({
-                "service_name": name,
+                "service_name": service_name,
                 "configured": exists,
                 "message": if exists {
-                    format!("{} is configured", name)
+                    format!("{} is configured", service_name)
                 } else {
-                    format!("{} is NOT configured. Use install_api_key to add it.", name)
+                    format!("{} is NOT configured. Use install_api_key to add it.", service_name)
                 }
             }))
         } else {
-            let names = db.get_configured_key_names().map_err(|e| metalcraft::GraphError::ToolCallFailed {
-                tool: "api_keys_check".into(),
-                message: format!("DB error: {}", e),
-            })?;
+            let names = store.list_names();
             Ok(serde_json::json!({
                 "configured_keys": names,
                 "count": names.len(),

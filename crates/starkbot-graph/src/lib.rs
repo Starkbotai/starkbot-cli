@@ -1,6 +1,10 @@
+#[cfg(feature = "tui")]
 use ratatui::buffer::Buffer;
+#[cfg(feature = "tui")]
 use ratatui::layout::Rect;
+#[cfg(feature = "tui")]
 use ratatui::style::{Color, Style};
+#[cfg(feature = "tui")]
 use ratatui::widgets::Widget;
 
 #[derive(Debug, Clone)]
@@ -77,12 +81,49 @@ impl Viewport {
     }
 }
 
+/// Build a graph from skill data for visualization.
+pub fn build_skill_graph(skills: &[(String, String, Vec<String>)]) -> GraphData {
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+
+    for (name, _desc, tags) in skills {
+        nodes.push(GraphNode {
+            id: name.clone(),
+            label: name.clone(),
+            category: tags.first().cloned().unwrap_or_else(|| "default".into()),
+            weight: 1.0,
+        });
+    }
+
+    // Build edges from shared tags
+    for i in 0..skills.len() {
+        for j in (i + 1)..skills.len() {
+            let shared: usize = skills[i].2.iter()
+                .filter(|t| skills[j].2.contains(t))
+                .count();
+            if shared > 0 {
+                edges.push(GraphEdge {
+                    from: skills[i].0.clone(),
+                    to: skills[j].0.clone(),
+                    label: None,
+                    kind: "related".into(),
+                    weight: shared as f32,
+                });
+            }
+        }
+    }
+
+    GraphData { nodes, edges }
+}
+
+// --- TUI Widget (only available with `tui` feature) ---
+
+#[cfg(feature = "tui")]
 /// Compute force-directed layout positions.
 fn layout_force_directed(graph: &GraphData, width: f64, height: f64) -> Vec<Position> {
     let n = graph.nodes.len();
     if n == 0 { return vec![]; }
 
-    // Initialize positions in a circle
     let mut positions: Vec<Position> = (0..n)
         .map(|i| {
             let angle = 2.0 * std::f64::consts::PI * i as f64 / n as f64;
@@ -104,7 +145,6 @@ fn layout_force_directed(graph: &GraphData, width: f64, height: f64) -> Vec<Posi
         let temperature = 1.0 - iter as f64 / iterations as f64;
         let mut forces: Vec<(f64, f64)> = vec![(0.0, 0.0); n];
 
-        // Repulsion between all pairs
         for i in 0..n {
             for j in (i + 1)..n {
                 let dx = positions[i].x - positions[j].x;
@@ -120,7 +160,6 @@ fn layout_force_directed(graph: &GraphData, width: f64, height: f64) -> Vec<Posi
             }
         }
 
-        // Attraction along edges
         for edge in &graph.edges {
             if let (Some(i), Some(j)) = (node_index(&edge.from), node_index(&edge.to)) {
                 let dx = positions[i].x - positions[j].x;
@@ -136,14 +175,12 @@ fn layout_force_directed(graph: &GraphData, width: f64, height: f64) -> Vec<Posi
             }
         }
 
-        // Apply forces
         let max_move = ideal_dist * temperature;
         for i in 0..n {
             let mag = (forces[i].0.powi(2) + forces[i].1.powi(2)).sqrt().max(0.001);
             let capped = mag.min(max_move);
             positions[i].x += forces[i].0 / mag * capped;
             positions[i].y += forces[i].1 / mag * capped;
-            // Keep within bounds
             positions[i].x = positions[i].x.clamp(2.0, width - 2.0);
             positions[i].y = positions[i].y.clamp(1.0, height - 1.0);
         }
@@ -152,6 +189,7 @@ fn layout_force_directed(graph: &GraphData, width: f64, height: f64) -> Vec<Posi
     positions
 }
 
+#[cfg(feature = "tui")]
 fn category_color(category: &str) -> Color {
     match category {
         "workflow" | "methodology" => Color::Cyan,
@@ -167,17 +205,20 @@ fn category_color(category: &str) -> Color {
     }
 }
 
+#[cfg(feature = "tui")]
 pub struct GraphWidget<'a> {
     graph: &'a GraphData,
     viewport: &'a Viewport,
 }
 
+#[cfg(feature = "tui")]
 impl<'a> GraphWidget<'a> {
     pub fn new(graph: &'a GraphData, viewport: &'a Viewport) -> Self {
         Self { graph, viewport }
     }
 }
 
+#[cfg(feature = "tui")]
 impl Widget for GraphWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         if self.graph.nodes.is_empty() {
@@ -230,7 +271,6 @@ impl Widget for GraphWidget<'_> {
                 let marker = if is_selected { "●" } else { "◉" };
                 buf.set_string(sx, sy, marker, style);
 
-                // Label
                 let label = if node.label.len() > 12 {
                     format!("{}...", &node.label[..9])
                 } else {
@@ -258,6 +298,7 @@ impl Widget for GraphWidget<'_> {
     }
 }
 
+#[cfg(feature = "tui")]
 /// Draw a simple line using Bresenham's algorithm.
 fn draw_line(buf: &mut Buffer, area: Rect, x1: u16, y1: u16, x2: u16, y2: u16, style: Style) {
     let (mut x, mut y) = (x1 as i32, y1 as i32);
@@ -283,39 +324,4 @@ fn draw_line(buf: &mut Buffer, area: Rect, x1: u16, y1: u16, x2: u16, y2: u16, s
         if e2 >= dy { err += dy; x += sx; }
         if e2 <= dx { err += dx; y += sy; }
     }
-}
-
-/// Build a graph from skill data for visualization.
-pub fn build_skill_graph(skills: &[(String, String, Vec<String>)]) -> GraphData {
-    let mut nodes = Vec::new();
-    let mut edges = Vec::new();
-
-    for (name, _desc, tags) in skills {
-        nodes.push(GraphNode {
-            id: name.clone(),
-            label: name.clone(),
-            category: tags.first().cloned().unwrap_or_else(|| "default".into()),
-            weight: 1.0,
-        });
-    }
-
-    // Build edges from shared tags
-    for i in 0..skills.len() {
-        for j in (i + 1)..skills.len() {
-            let shared: usize = skills[i].2.iter()
-                .filter(|t| skills[j].2.contains(t))
-                .count();
-            if shared > 0 {
-                edges.push(GraphEdge {
-                    from: skills[i].0.clone(),
-                    to: skills[j].0.clone(),
-                    label: None,
-                    kind: "related".into(),
-                    weight: shared as f32,
-                });
-            }
-        }
-    }
-
-    GraphData { nodes, edges }
 }

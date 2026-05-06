@@ -8,13 +8,13 @@ use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Tabs, Wrap};
 
+use starkbot_api::events::{BackendEvent, FrontendCommand};
+use starkbot_api::types::AppSnapshot;
 use starkbot_core::persona::Persona;
 use starkbot_graph::{GraphData, GraphWidget, Viewport};
 use starkbot_skills::Skill;
-use starkbot_tools::approval::ApprovalRequest;
 
 use std::path::PathBuf;
-use std::sync::mpsc::SyncSender;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum ActiveView {
@@ -61,13 +61,6 @@ impl ActiveView {
     }
 }
 
-/// Actions the TUI requests the app to perform (e.g., DB writes).
-pub enum TuiAction {
-    AddApiKey { name: String, key: String },
-    DeleteApiKey { name: String },
-    ChangeModel { model: String },
-}
-
 /// A chat message in the TUI.
 #[derive(Clone)]
 pub struct ChatMessage {
@@ -81,6 +74,13 @@ enum ApiKeyInputMode {
     Normal,
     EnteringName,
     EnteringKey,
+}
+
+/// A pending tool approval being shown in the TUI.
+pub struct PendingApproval {
+    pub request_id: String,
+    pub tool_name: String,
+    pub args_display: String,
 }
 
 /// TUI application state.
@@ -105,8 +105,6 @@ pub struct TuiState {
     // API keys state
     pub api_keys: Vec<(String, String, String)>, // (name, masked_key, updated_at)
     pub selected_api_key: usize,
-    pub db_path: Option<PathBuf>,
-    pub pending_action: Option<TuiAction>,
     // API key add flow
     api_key_input_mode: ApiKeyInputMode,
     api_key_name_input: String,
@@ -118,12 +116,6 @@ pub struct TuiState {
     pub pending_approval: Option<PendingApproval>,
     // Chat scroll: offset from bottom (0 = pinned to bottom, higher = scrolled up)
     pub chat_scroll_up: u16,
-}
-
-/// A pending tool approval being shown in the TUI.
-pub struct PendingApproval {
-    pub request: ApprovalRequest,
-    pub response_tx: SyncSender<bool>,
 }
 
 impl TuiState {
@@ -156,8 +148,6 @@ impl TuiState {
             agent_busy: false,
             api_keys: vec![],
             selected_api_key: 0,
-            db_path: None,
-            pending_action: None,
             api_key_input_mode: ApiKeyInputMode::Normal,
             api_key_name_input: String::new(),
             api_key_value_input: String::new(),
@@ -168,13 +158,145 @@ impl TuiState {
         }
     }
 
+    /// Create TuiState from an AppSnapshot (initial state from backend).
+    pub fn from_snapshot(snapshot: &AppSnapshot) -> Self {
+        let selected_model = snapshot.available_models.iter()
+            .position(|m| *m == snapshot.model_name)
+            .unwrap_or(0);
+
+        let skills: Vec<Skill> = snapshot.skills.iter().map(|s| Skill {
+            name: s.name.clone(),
+            description: s.description.clone(),
+            version: s.version.clone(),
+            tags: s.tags.clone(),
+            requires_tools: s.requires_tools.clone(),
+            content: s.content.clone(),
+            file_path: PathBuf::new(),
+        }).collect();
+        let skill_names: Vec<String> = skills.iter().map(|s| s.name.clone()).collect();
+
+        // Convert persona infos to Persona objects for rendering
+        let personas: Vec<Persona> = snapshot.personas.iter().map(|p| {
+            Persona::from_display_info(
+                &p.key, &p.label, &p.description, &p.emoji,
+                p.enabled, &p.tool_groups, &p.skill_tags,
+                &p.system_prompt_preview,
+            )
+        }).collect();
+
+        // Build graph data
+        let mut graph = GraphData::default();
+        for n in &snapshot.graph_nodes {
+            graph.nodes.push(starkbot_graph::GraphNode {
+                id: n.id.clone(),
+                label: n.label.clone(),
+                category: n.category.clone(),
+                weight: n.weight,
+            });
+        }
+        for e in &snapshot.graph_edges {
+            graph.edges.push(starkbot_graph::GraphEdge {
+                from: e.from.clone(),
+                to: e.to.clone(),
+                label: e.label.clone(),
+                kind: e.kind.clone(),
+                weight: e.weight,
+            });
+        }
+
+        let api_keys: Vec<(String, String, String)> = snapshot.api_keys.iter()
+            .map(|k| (k.name.clone(), k.masked_key.clone(), String::new()))
+            .collect();
+
+        let messages: Vec<ChatMessage> = snapshot.messages.iter()
+            .map(|m| ChatMessage { role: m.role.clone(), content: m.content.clone() })
+            .collect();
+
+        Self {
+            active_view: ActiveView::Chat,
+            messages,
+            input: String::new(),
+            input_cursor: 0,
+            persona_name: snapshot.persona_name.clone(),
+            model_name: snapshot.model_name.clone(),
+            status: snapshot.status.clone(),
+            tool_activity: snapshot.tool_activity.clone(),
+            skill_graph: graph,
+            graph_viewport: Viewport::default(),
+            skill_names,
+            skills,
+            selected_skill: 0,
+            personas,
+            selected_persona: 0,
+            should_quit: false,
+            agent_busy: snapshot.agent_busy,
+            api_keys,
+            selected_api_key: 0,
+            api_key_input_mode: ApiKeyInputMode::Normal,
+            api_key_name_input: String::new(),
+            api_key_value_input: String::new(),
+            available_models: snapshot.available_models.clone(),
+            selected_model,
+            pending_approval: None,
+            chat_scroll_up: 0,
+        }
+    }
+
+    /// Apply a BackendEvent to update TUI state.
+    pub fn apply_event(&mut self, event: &BackendEvent) {
+        match event {
+            BackendEvent::ToolCall { name, args } => {
+                self.add_tool_activity(&format!("▶ {} {}", name, args));
+                self.add_message("tool", &format!("▶ {}({})", name, truncate_str(args, 80)));
+            }
+            BackendEvent::ToolResult { name, success, preview } => {
+                let icon = if *success { "✓" } else { "✗" };
+                self.add_tool_activity(&format!("{} {}", icon, name));
+                if !success {
+                    self.add_message("error", &format!("{} {} failed: {}", icon, name, truncate_str(preview, 100)));
+                }
+            }
+            BackendEvent::TurnComplete { answer } => {
+                self.agent_busy = false;
+                self.status = "Ready".to_string();
+                self.add_message("assistant", answer);
+            }
+            BackendEvent::Error { message } => {
+                self.agent_busy = false;
+                self.status = "Ready".to_string();
+                self.add_message("error", message);
+            }
+            BackendEvent::ApprovalRequired { request_id, tool_name, args_display } => {
+                self.pending_approval = Some(PendingApproval {
+                    request_id: request_id.clone(),
+                    tool_name: tool_name.clone(),
+                    args_display: args_display.clone(),
+                });
+            }
+            BackendEvent::ModelChanged { model } => {
+                self.model_name = model.clone();
+                self.selected_model = self.available_models.iter()
+                    .position(|m| m == model)
+                    .unwrap_or(self.selected_model);
+            }
+            BackendEvent::StatusUpdate { busy, message } => {
+                self.agent_busy = *busy;
+                self.status = message.clone();
+            }
+            BackendEvent::Info { message } => {
+                self.add_message("assistant", message);
+            }
+            BackendEvent::Snapshot(_) => {
+                // Full snapshot updates handled separately via from_snapshot
+            }
+        }
+    }
+
     pub fn add_message(&mut self, role: &str, content: &str) {
         self.messages.push(ChatMessage {
             role: role.to_string(),
             content: content.to_string(),
         });
-        // If pinned to bottom (offset 0), stay there.
-        // If scrolled up, stay where you are (don't jump).
     }
 
     pub fn add_tool_activity(&mut self, activity: &str) {
@@ -185,8 +307,12 @@ impl TuiState {
     }
 }
 
-/// Handle a key event, returns Some(input) if user submitted a message.
-pub fn handle_key(state: &mut TuiState, key: KeyEvent) -> Option<String> {
+fn truncate_str(s: &str, max: usize) -> String {
+    if s.len() <= max { s.to_string() } else { format!("{}...", &s[..max]) }
+}
+
+/// Handle a key event. Returns Some(FrontendCommand) if input produces a command.
+pub fn handle_key(state: &mut TuiState, key: KeyEvent) -> Option<FrontendCommand> {
     // Global keys
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         state.should_quit = true;
@@ -199,25 +325,29 @@ pub fn handle_key(state: &mut TuiState, key: KeyEvent) -> Option<String> {
         ActiveView::Graph => { handle_graph_key(state, key); None }
         ActiveView::Personas => { handle_personas_key(state, key); None }
         ActiveView::Memory => { handle_memory_key(state, key); None }
-        ActiveView::ApiKeys => { handle_api_keys_key(state, key); None }
-        ActiveView::Settings => { handle_settings_key(state, key); None }
+        ActiveView::ApiKeys => handle_api_keys_key(state, key),
+        ActiveView::Settings => handle_settings_key(state, key),
     }
 }
 
-fn handle_chat_key(state: &mut TuiState, key: KeyEvent) -> Option<String> {
+fn handle_chat_key(state: &mut TuiState, key: KeyEvent) -> Option<FrontendCommand> {
     // Handle approval prompt first
     if state.pending_approval.is_some() {
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
                 if let Some(approval) = state.pending_approval.take() {
-                    let _ = approval.response_tx.send(true);
-                    state.add_message("tool", &format!("✓ Approved: {}", approval.request.tool_name));
+                    return Some(FrontendCommand::ApprovalResponse {
+                        request_id: approval.request_id,
+                        approved: true,
+                    });
                 }
             }
             KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                 if let Some(approval) = state.pending_approval.take() {
-                    let _ = approval.response_tx.send(false);
-                    state.add_message("tool", &format!("✗ Denied: {}", approval.request.tool_name));
+                    return Some(FrontendCommand::ApprovalResponse {
+                        request_id: approval.request_id,
+                        approved: false,
+                    });
                 }
             }
             _ => {}
@@ -249,7 +379,13 @@ fn handle_chat_key(state: &mut TuiState, key: KeyEvent) -> Option<String> {
             state.input.clear();
             state.input_cursor = 0;
             state.chat_scroll_up = 0; // snap to bottom on send
-            Some(input)
+
+            // Add user message to TUI immediately
+            state.add_message("user", &input);
+            state.agent_busy = true;
+            state.status = "Agent thinking...".to_string();
+
+            Some(FrontendCommand::SendMessage { content: input })
         }
         KeyCode::Char(c) => {
             state.input.insert(state.input_cursor, c);
@@ -323,7 +459,7 @@ fn handle_memory_key(state: &mut TuiState, key: KeyEvent) {
     }
 }
 
-fn handle_api_keys_key(state: &mut TuiState, key: KeyEvent) {
+fn handle_api_keys_key(state: &mut TuiState, key: KeyEvent) -> Option<FrontendCommand> {
     match state.api_key_input_mode {
         ApiKeyInputMode::Normal => {
             match key.code {
@@ -344,10 +480,10 @@ fn handle_api_keys_key(state: &mut TuiState, key: KeyEvent) {
                 KeyCode::Char('d') => {
                     if state.selected_api_key < state.api_keys.len() {
                         let name = state.api_keys[state.selected_api_key].0.clone();
-                        state.pending_action = Some(TuiAction::DeleteApiKey { name });
                         if state.selected_api_key > 0 {
                             state.selected_api_key -= 1;
                         }
+                        return Some(FrontendCommand::ApiKeyDelete { name });
                     }
                 }
                 _ => {}
@@ -380,11 +516,11 @@ fn handle_api_keys_key(state: &mut TuiState, key: KeyEvent) {
                 KeyCode::Enter => {
                     if !state.api_key_value_input.is_empty() {
                         let name = state.api_key_name_input.clone();
-                        let key = state.api_key_value_input.clone();
-                        state.pending_action = Some(TuiAction::AddApiKey { name, key });
+                        let key_val = state.api_key_value_input.clone();
                         state.api_key_input_mode = ApiKeyInputMode::Normal;
                         state.api_key_name_input.clear();
                         state.api_key_value_input.clear();
+                        return Some(FrontendCommand::ApiKeyAdd { name, key: key_val });
                     }
                 }
                 KeyCode::Char(c) => {
@@ -397,6 +533,33 @@ fn handle_api_keys_key(state: &mut TuiState, key: KeyEvent) {
             }
         }
     }
+    None
+}
+
+fn handle_settings_key(state: &mut TuiState, key: KeyEvent) -> Option<FrontendCommand> {
+    match key.code {
+        KeyCode::Tab => state.active_view = state.active_view.next(),
+        KeyCode::Up | KeyCode::Char('k') => {
+            state.selected_model = state.selected_model.saturating_sub(1);
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if !state.available_models.is_empty() {
+                state.selected_model = (state.selected_model + 1).min(state.available_models.len() - 1);
+            }
+        }
+        KeyCode::Enter => {
+            if state.selected_model < state.available_models.len() {
+                let new_model = &state.available_models[state.selected_model];
+                if *new_model != state.model_name {
+                    return Some(FrontendCommand::SwitchModel {
+                        model: new_model.clone(),
+                    });
+                }
+            }
+        }
+        _ => {}
+    }
+    None
 }
 
 /// Draw the full TUI frame.
@@ -466,7 +629,6 @@ fn render_inline_markdown<'a>(text: &'a str, spans: &mut Vec<Span<'a>>) {
                 ));
                 remaining = &after_start[end + 2..];
             } else {
-                // No closing **, just output as-is
                 spans.push(Span::raw(&remaining[start..]));
                 return;
             }
@@ -548,7 +710,6 @@ fn draw_chat(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
             }
 
             if in_code_block {
-                // Code block content — render in a distinct style
                 spans.push(Span::styled(
                     format!("  {}", line_text),
                     Style::default().fg(Color::Green),
@@ -582,7 +743,6 @@ fn draw_chat(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
             } else if line_text.trim().is_empty() {
                 spans.push(Span::raw(""));
             } else if line_text.starts_with(|c: char| c.is_ascii_digit()) && line_text.contains(". ") {
-                // Numbered list
                 if let Some(pos) = line_text.find(". ") {
                     let num = &line_text[..pos + 2];
                     let rest = &line_text[pos + 2..];
@@ -597,13 +757,12 @@ fn draw_chat(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
 
             lines.push(Line::from(spans));
         }
-        // Blank line between messages
         lines.push(Line::from(""));
     }
 
-    // Calculate scroll — account for wrapping by estimating wrapped line count
-    let content_width = chunks[0].width.saturating_sub(2) as usize; // minus borders
-    let visible_height = chunks[0].height.saturating_sub(2) as usize; // minus borders
+    // Calculate scroll
+    let content_width = chunks[0].width.saturating_sub(2) as usize;
+    let visible_height = chunks[0].height.saturating_sub(2) as usize;
     let mut wrapped_total: usize = 0;
     for line in &lines {
         let line_width: usize = line.spans.iter().map(|s| s.content.len()).sum();
@@ -615,7 +774,6 @@ fn draw_chat(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
     }
 
     let max_scroll = wrapped_total.saturating_sub(visible_height) as u16;
-    // scroll_up=0 means at bottom (max_scroll), higher means further up
     let clamped_up = state.chat_scroll_up.min(max_scroll);
     let scroll_offset = max_scroll.saturating_sub(clamped_up);
 
@@ -635,11 +793,10 @@ fn draw_chat(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
         let mut lines = vec![
             Line::from(vec![
                 Span::styled("  ", Style::default()),
-                Span::styled(&approval.request.tool_name, Style::default().fg(Color::White).bold()),
+                Span::styled(&approval.tool_name, Style::default().fg(Color::White).bold()),
             ]),
         ];
-        // Show args on separate lines for readability
-        for part in approval.request.args_display.split('\n') {
+        for part in approval.args_display.split('\n') {
             let trimmed = if part.len() > 70 { format!("{:.70}...", part) } else { part.to_string() };
             lines.push(Line::from(vec![
                 Span::styled("  ", Style::default()),
@@ -698,7 +855,6 @@ fn draw_skills(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
         .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
         .split(area);
 
-    // Skill list
     let items: Vec<Line> = state.skill_names.iter().enumerate().map(|(i, name)| {
         let style = if i == state.selected_skill {
             Style::default().fg(Color::Cyan).bold()
@@ -712,7 +868,6 @@ fn draw_skills(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
         .block(Block::default().borders(Borders::ALL).title(" Skills "));
     frame.render_widget(list, chunks[0]);
 
-    // Skill detail
     let detail_text = if state.skills.is_empty() {
         "No skills loaded".to_string()
     } else if state.selected_skill < state.skills.len() {
@@ -754,7 +909,6 @@ fn draw_personas(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
         .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
         .split(area);
 
-    // Persona list
     let items: Vec<Line> = state.personas.iter().enumerate().map(|(i, p)| {
         let style = if i == state.selected_persona {
             Style::default().fg(Color::Cyan).bold()
@@ -769,7 +923,6 @@ fn draw_personas(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
         .block(Block::default().borders(Borders::ALL).title(" Personas "));
     frame.render_widget(list, chunks[0]);
 
-    // Persona detail
     let detail_text = if state.personas.is_empty() {
         "No personas loaded".to_string()
     } else if state.selected_persona < state.personas.len() {
@@ -791,7 +944,6 @@ fn draw_personas(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
             text.push_str(&format!("Skills: {}\n", p.explicit_skills.join(", ")));
         }
         text.push_str("\n─────────────────────────────────\n\n");
-        // Show a preview of the system prompt (first 500 chars)
         let preview: String = p.system_prompt.chars().take(500).collect();
         text.push_str(&preview);
         if p.system_prompt.len() > 500 {
@@ -832,7 +984,6 @@ fn draw_api_keys(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
         .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
         .split(area);
 
-    // Left panel: key list
     let mut items: Vec<Line> = vec![];
     if state.api_keys.is_empty() {
         items.push(Line::from(Span::styled(
@@ -859,7 +1010,6 @@ fn draw_api_keys(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
         .block(Block::default().borders(Borders::ALL).title(" API Keys "));
     frame.render_widget(list, chunks[0]);
 
-    // Right panel: detail + input form
     let mut detail_lines: Vec<Line> = vec![];
 
     match state.api_key_input_mode {
@@ -919,38 +1069,12 @@ fn draw_api_keys(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
     frame.render_widget(detail, chunks[1]);
 }
 
-fn handle_settings_key(state: &mut TuiState, key: KeyEvent) {
-    match key.code {
-        KeyCode::Tab => state.active_view = state.active_view.next(),
-        KeyCode::Up | KeyCode::Char('k') => {
-            state.selected_model = state.selected_model.saturating_sub(1);
-        }
-        KeyCode::Down | KeyCode::Char('j') => {
-            if !state.available_models.is_empty() {
-                state.selected_model = (state.selected_model + 1).min(state.available_models.len() - 1);
-            }
-        }
-        KeyCode::Enter => {
-            if state.selected_model < state.available_models.len() {
-                let new_model = &state.available_models[state.selected_model];
-                if *new_model != state.model_name {
-                    state.pending_action = Some(TuiAction::ChangeModel {
-                        model: new_model.clone(),
-                    });
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
 fn draw_settings(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
         .split(area);
 
-    // Left panel: model list
     let items: Vec<Line> = state.available_models.iter().enumerate().map(|(i, model)| {
         let is_current = *model == state.model_name;
         let is_selected = i == state.selected_model;
@@ -969,7 +1093,6 @@ fn draw_settings(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
         .block(Block::default().borders(Borders::ALL).title(" Models "));
     frame.render_widget(list, chunks[0]);
 
-    // Right panel: info
     let mut detail_lines: Vec<Line> = vec![];
     if state.selected_model < state.available_models.len() {
         let model = &state.available_models[state.selected_model];

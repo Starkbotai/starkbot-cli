@@ -243,6 +243,18 @@ impl Database {
         rows.collect()
     }
 
+    /// List all API keys with raw (unmasked) values: (service_name, api_key).
+    /// Used for migration to keys.json.
+    pub fn list_api_keys_raw(&self) -> SqlResult<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT service_name, api_key FROM external_api_keys ORDER BY service_name",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?;
+        rows.collect()
+    }
+
     /// Returns names of all configured API keys.
     pub fn get_configured_key_names(&self) -> SqlResult<Vec<String>> {
         let mut stmt = self.conn.prepare(

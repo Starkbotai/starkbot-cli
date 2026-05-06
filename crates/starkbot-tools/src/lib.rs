@@ -23,7 +23,7 @@ pub struct ToolConfig {
     pub system_prompt: String,
     pub skills_dir: PathBuf,
     pub available_skills: Vec<String>,
-    pub db_path: Option<PathBuf>,
+    pub keys_path: Option<PathBuf>,
 }
 
 /// Register only the tools listed by name.
@@ -60,10 +60,10 @@ pub fn create_registry_for_with_config(
             "web_fetch" => registry.register(web_fetch::WebFetchTool::default()),
             "api_keys_check" => {
                 if let Some(cfg) = config {
-                    if let Some(ref db_path) = cfg.db_path {
-                        registry.register(api_keys_check::ApiKeysCheckTool::new(db_path.clone()))
+                    if let Some(ref keys_path) = cfg.keys_path {
+                        registry.register(api_keys_check::ApiKeysCheckTool::new(keys_path.clone()))
                     } else {
-                        log::warn!("api_keys_check tool requires db_path in ToolConfig, skipping");
+                        log::warn!("api_keys_check tool requires keys_path in ToolConfig, skipping");
                         registry
                     }
                 } else {
@@ -73,10 +73,10 @@ pub fn create_registry_for_with_config(
             }
             "install_api_key" => {
                 if let Some(cfg) = config {
-                    if let Some(ref db_path) = cfg.db_path {
-                        registry.register(install_api_key::InstallApiKeyTool::new(db_path.clone()))
+                    if let Some(ref keys_path) = cfg.keys_path {
+                        registry.register(install_api_key::InstallApiKeyTool::new(keys_path.clone()))
                     } else {
-                        log::warn!("install_api_key tool requires db_path in ToolConfig, skipping");
+                        log::warn!("install_api_key tool requires keys_path in ToolConfig, skipping");
                         registry
                     }
                 } else {

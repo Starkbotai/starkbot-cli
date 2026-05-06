@@ -1,14 +1,14 @@
 use async_trait::async_trait;
 use std::path::PathBuf;
-use starkbot_db::{Database, mask_key};
+use starkbot_config::keys::{self, KeyStore};
 
 pub struct InstallApiKeyTool {
-    db_path: PathBuf,
+    keys_path: PathBuf,
 }
 
 impl InstallApiKeyTool {
-    pub fn new(db_path: PathBuf) -> Self {
-        Self { db_path }
+    pub fn new(keys_path: PathBuf) -> Self {
+        Self { keys_path }
     }
 }
 
@@ -22,7 +22,7 @@ fn is_upper_snake_case(s: &str) -> bool {
 impl metalcraft::Tool for InstallApiKeyTool {
     fn name(&self) -> &str { "install_api_key" }
     fn description(&self) -> &str {
-        "Store an API key for an external service. The key name must be UPPER_SNAKE_CASE (e.g. CLOUDFLARE_API_TOKEN, GITHUB_TOKEN). Keys are stored securely in the local database."
+        "Store an API key for an external service. The key name must be UPPER_SNAKE_CASE (e.g. CLOUDFLARE_API_TOKEN, GITHUB_TOKEN). Keys are stored in the local config directory."
     }
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
@@ -62,21 +62,22 @@ impl metalcraft::Tool for InstallApiKeyTool {
             }));
         }
 
-        let db = Database::open(&self.db_path).map_err(|e| metalcraft::GraphError::ToolCallFailed {
+        let mut store = KeyStore::load(&self.keys_path).map_err(|e| metalcraft::GraphError::ToolCallFailed {
             tool: "install_api_key".into(),
-            message: format!("Failed to open database: {}", e),
+            message: format!("Failed to load keys: {}", e),
         })?;
 
-        db.upsert_api_key(service_name, api_key).map_err(|e| metalcraft::GraphError::ToolCallFailed {
+        store.upsert(service_name, api_key);
+        store.save(&self.keys_path).map_err(|e| metalcraft::GraphError::ToolCallFailed {
             tool: "install_api_key".into(),
-            message: format!("Failed to store key: {}", e),
+            message: format!("Failed to save keys: {}", e),
         })?;
 
         Ok(serde_json::json!({
             "success": true,
             "service_name": service_name,
-            "masked_key": mask_key(api_key),
-            "message": format!("API key for {} installed successfully ({})", service_name, mask_key(api_key))
+            "masked_key": keys::mask_key(api_key),
+            "message": format!("API key for {} installed successfully ({})", service_name, keys::mask_key(api_key))
         }))
     }
 }

@@ -29,20 +29,20 @@ impl AgentRunner {
         model_name: &str,
         approval_mode: ApprovalMode,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        Self::build_with_db(persona, skills_dir, cwd, api_key, model_name, approval_mode, None)
+        Self::build_with_keys(persona, skills_dir, cwd, api_key, model_name, approval_mode, None)
     }
 
-    /// Build an agent runner with optional database path and verbose guard output.
-    pub fn build_with_db(
+    /// Build an agent runner with optional keys path and verbose guard output.
+    pub fn build_with_keys(
         persona: &Persona,
         skills_dir: &Path,
         cwd: &str,
         api_key: &str,
         model_name: &str,
         approval_mode: ApprovalMode,
-        db_path: Option<PathBuf>,
+        keys_path: Option<PathBuf>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        Self::build_inner(persona, skills_dir, cwd, api_key, model_name, approval_mode, db_path, true)
+        Self::build_inner(persona, skills_dir, cwd, api_key, model_name, approval_mode, keys_path, true)
     }
 
     /// Build an agent runner for TUI mode (no stderr output from guard).
@@ -53,9 +53,9 @@ impl AgentRunner {
         api_key: &str,
         model_name: &str,
         approval_mode: ApprovalMode,
-        db_path: Option<PathBuf>,
+        keys_path: Option<PathBuf>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        Self::build_inner(persona, skills_dir, cwd, api_key, model_name, approval_mode, db_path, false)
+        Self::build_inner(persona, skills_dir, cwd, api_key, model_name, approval_mode, keys_path, false)
     }
 
     fn build_inner(
@@ -65,7 +65,7 @@ impl AgentRunner {
         api_key: &str,
         model_name: &str,
         approval_mode: ApprovalMode,
-        db_path: Option<PathBuf>,
+        keys_path: Option<PathBuf>,
         verbose_guard: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // Load skill registry for tag-based discovery
@@ -81,7 +81,7 @@ impl AgentRunner {
             system_prompt: String::new(), // placeholder — we'll set real prompt after
             skills_dir: skills_dir.to_path_buf(),
             available_skills: skills,
-            db_path,
+            keys_path,
         };
         let registry = starkbot_tools::create_registry_for_with_config(&tools, Some(&tool_config));
 

@@ -3,5 +3,9 @@ name = "starkbot-graph"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["tui"]
+tui = ["dep:ratatui"]
+
 [dependencies]
-ratatui = { workspace = true }
+ratatui = { workspace = true, optional = true }

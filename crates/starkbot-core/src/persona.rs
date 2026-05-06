@@ -160,6 +160,7 @@ impl Persona {
     }
 
     /// Load a persona. Tries agents/{slug}/agent.md first, then personas/{slug}.json.
+    /// Searches multiple directories in priority order.
     pub fn load(slug: &str, personas_dir: &Path) -> Result<Self, String> {
         // Try markdown agent format first
         let agents_dir = personas_dir.parent().unwrap_or(Path::new(".")).join("agents");
@@ -175,6 +176,21 @@ impl Persona {
         }
 
         Err(format!("Persona '{}' not found (checked {} and {})", slug, agent_md.display(), json_file.display()))
+    }
+
+    /// Load a persona with WAD-aware layered resolution.
+    /// Search order: config_agents_dir → CWD agents/ → CWD personas/ → exe-adjacent.
+    pub fn load_with_config(slug: &str, config_agents_dir: Option<&Path>, personas_dir: &Path) -> Result<Self, String> {
+        // 1. WAD agents directory (highest priority)
+        if let Some(config_dir) = config_agents_dir {
+            let agent_md = config_dir.join(slug).join("agent.md");
+            if agent_md.exists() {
+                return Self::load_from_markdown(slug, &agent_md);
+            }
+        }
+
+        // 2. Fall through to standard resolution
+        Self::load(slug, personas_dir)
     }
 
     fn load_from_json(slug: &str, path: &Path) -> Result<Self, String> {
@@ -230,20 +246,21 @@ impl Persona {
     }
 
     pub fn list_available(personas_dir: &Path) -> Vec<String> {
+        Self::list_available_with_config(None, personas_dir)
+    }
+
+    /// List available personas/agents with WAD-aware search.
+    pub fn list_available_with_config(config_agents_dir: Option<&Path>, personas_dir: &Path) -> Vec<String> {
         let mut slugs: Vec<String> = Vec::new();
 
-        // Check agents/ directory
-        let agents_dir = personas_dir.parent().unwrap_or(Path::new(".")).join("agents");
-        if let Ok(entries) = std::fs::read_dir(&agents_dir) {
-            for entry in entries.filter_map(|e| e.ok()) {
-                let path = entry.path();
-                if path.is_dir() && path.join("agent.md").exists() {
-                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                        slugs.push(name.to_string());
-                    }
-                }
-            }
+        // Check WAD agents directory first
+        if let Some(config_dir) = config_agents_dir {
+            collect_agent_slugs(config_dir, &mut slugs);
         }
+
+        // Check CWD agents/ directory
+        let agents_dir = personas_dir.parent().unwrap_or(Path::new(".")).join("agents");
+        collect_agent_slugs(&agents_dir, &mut slugs);
 
         // Check personas/ directory (legacy JSON)
         if let Ok(entries) = std::fs::read_dir(personas_dir) {
@@ -354,41 +371,77 @@ impl Persona {
         &self.label
     }
 
-    pub fn default_personas_dir() -> PathBuf {
-        let cwd_based = PathBuf::from("personas");
-        if cwd_based.is_dir() { return cwd_based; }
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(parent) = exe.parent() {
-                let exe_based = parent.join("personas");
-                if exe_based.is_dir() { return exe_based; }
-            }
+    /// Create a Persona from display info (for TUI rendering from API snapshot).
+    pub fn from_display_info(
+        key: &str, label: &str, description: &str, emoji: &str,
+        enabled: bool, tool_groups: &[String], skill_tags: &[String],
+        system_prompt_preview: &str,
+    ) -> Self {
+        Self {
+            key: key.to_string(),
+            label: label.to_string(),
+            description: description.to_string(),
+            emoji: emoji.to_string(),
+            version: String::new(),
+            tool_groups: tool_groups.to_vec(),
+            additional_tools: vec![],
+            skill_tags: skill_tags.to_vec(),
+            explicit_skills: vec![],
+            aliases: vec![],
+            max_iterations: 100,
+            sort_order: 0,
+            enabled,
+            system_prompt: system_prompt_preview.to_string(),
+            legacy_tools: vec![],
+            legacy_skills: vec![],
         }
-        cwd_based
+    }
+
+    pub fn default_personas_dir() -> PathBuf {
+        resolve_data_dir("personas")
     }
 
     pub fn default_skills_dir() -> PathBuf {
-        let cwd_based = PathBuf::from("skills");
-        if cwd_based.is_dir() { return cwd_based; }
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(parent) = exe.parent() {
-                let exe_based = parent.join("skills");
-                if exe_based.is_dir() { return exe_based; }
-            }
-        }
-        cwd_based
+        resolve_data_dir("skills")
     }
 
     pub fn default_agents_dir() -> PathBuf {
-        let cwd_based = PathBuf::from("agents");
-        if cwd_based.is_dir() { return cwd_based; }
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(parent) = exe.parent() {
-                let exe_based = parent.join("agents");
-                if exe_based.is_dir() { return exe_based; }
+        resolve_data_dir("agents")
+    }
+
+}
+
+/// Collect agent slugs from a directory of agent folders.
+fn collect_agent_slugs(dir: &Path, slugs: &mut Vec<String>) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.is_dir() && path.join("agent.md").exists() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if !slugs.contains(&name.to_string()) {
+                        slugs.push(name.to_string());
+                    }
+                }
             }
         }
-        cwd_based
     }
+}
+
+/// Resolve a data directory: CWD first, then exe parent.
+fn resolve_data_dir(name: &str) -> PathBuf {
+    // 2. CWD-relative (dev workflow)
+    let cwd_based = PathBuf::from(name);
+    if cwd_based.is_dir() { return cwd_based; }
+
+    // 3. Exe-adjacent (installed binary)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let exe_based = parent.join(name);
+            if exe_based.is_dir() { return exe_based; }
+        }
+    }
+
+    cwd_based
 }
 
 fn load_skill_description(name: &str, skills_dir: &Path) -> String {

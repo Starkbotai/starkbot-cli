@@ -8,27 +8,21 @@ name = "starkbot"
 path = "src/main.rs"
 
 [dependencies]
+starkbot-api = { path = "../starkbot-api" }
 starkbot-tui = { path = "../starkbot-tui" }
 starkbot-core = { path = "../starkbot-core" }
 starkbot-tools = { path = "../starkbot-tools" }
-starkbot-skills = { path = "../starkbot-skills" }
-starkbot-memory = { path = "../starkbot-memory" }
-starkbot-db = { path = "../starkbot-db" }
-starkbot-graph = { path = "../starkbot-graph" }
+starkbot-config = { path = "../starkbot-config" }
 metalcraft = { workspace = true }
-rig = { workspace = true }
-tokio = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
-log = { workspace = true }
+tokio = { workspace = true }
 env_logger = { workspace = true }
 dotenvy = { workspace = true }
-chrono = { workspace = true }
 crossterm = { workspace = true }
 ratatui = { workspace = true }
-dirs = { workspace = true }
 
 [dev-dependencies]
 spice-framework = { workspace = true }
 async-trait = { workspace = true }
 uuid = { workspace = true }
+rig = { workspace = true }

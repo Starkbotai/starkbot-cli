@@ -9,6 +9,7 @@ rig = { workspace = true }
 starkbot-skills = { path = "../starkbot-skills" }
 starkbot-memory = { path = "../starkbot-memory" }
 starkbot-db = { path = "../starkbot-db" }
+starkbot-config = { path = "../starkbot-config" }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }

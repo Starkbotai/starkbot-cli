@@ -4,12 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+starkbot-api = { path = "../starkbot-api" }
 starkbot-core = { path = "../starkbot-core" }
 starkbot-graph = { path = "../starkbot-graph" }
 starkbot-skills = { path = "../starkbot-skills" }
-starkbot-tools = { path = "../starkbot-tools" }
-starkbot-memory = { path = "../starkbot-memory" }
-starkbot-db = { path = "../starkbot-db" }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 tokio = { workspace = true }
