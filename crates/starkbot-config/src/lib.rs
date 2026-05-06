@@ -1,6 +1,8 @@
 pub mod keys;
 pub mod settings;
 pub mod manifest;
+pub mod sessions;
+pub mod schedules;
 
 use std::path::{Path, PathBuf};
 
@@ -62,6 +64,10 @@ impl AppConfig {
         self.root.join("sessions")
     }
 
+    pub fn schedules_dir(&self) -> PathBuf {
+        self.root.join("schedules")
+    }
+
     /// Ensure all directories exist and seed defaults on first run.
     /// `bundled_agents` and `bundled_skills` are source directories to copy from
     /// (typically CWD-relative or exe-adjacent).
@@ -77,6 +83,7 @@ impl AppConfig {
             &self.skills_dir(),
             &self.memories_dir(),
             &self.sessions_dir(),
+            &self.schedules_dir(),
         ];
         for dir in &dirs {
             std::fs::create_dir_all(dir)

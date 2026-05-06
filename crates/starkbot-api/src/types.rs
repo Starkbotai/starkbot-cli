@@ -1,5 +1,11 @@
 use serde::{Deserialize, Serialize};
 
+pub use starkbot_config::sessions::{ChatSession, ChatSessionMessage, SessionSummary};
+pub use starkbot_config::schedules::{
+    FlowNode, FlowNodeType, FlowEdge, FlowDefinition,
+    Schedule, ScheduledTask, ScheduledTaskSummary,
+};
+
 /// A chat message DTO.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessageDto {
@@ -72,4 +78,10 @@ pub struct AppSnapshot {
     pub available_models: Vec<String>,
     pub graph_nodes: Vec<GraphNodeDto>,
     pub graph_edges: Vec<GraphEdgeDto>,
+    pub skills_dir: String,
+    pub agents_dir: String,
+    pub sessions: Vec<SessionSummary>,
+    pub scheduled_tasks: Vec<ScheduledTaskSummary>,
+    pub sessions_dir: String,
+    pub schedules_dir: String,
 }

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import type { AppSnapshot, BackendEvent, ChatMessage } from "../types";
+import type { AppSnapshot, BackendEvent, ChatMessage, ChatSession, SessionSummary, ScheduledTaskSummary, Schedule, FlowDefinition } from "../types";
 
 interface PendingApproval {
   request_id: string;
@@ -25,6 +25,9 @@ interface BackendState {
   pendingApproval: PendingApproval | null;
   snapshot: AppSnapshot | null;
   debugLogs: DebugLogEntry[];
+  viewingSession: ChatSession | null;
+  sessions: SessionSummary[];
+  scheduledTasks: ScheduledTaskSummary[];
 }
 
 export function useBackend() {
@@ -38,6 +41,9 @@ export function useBackend() {
     pendingApproval: null,
     snapshot: null,
     debugLogs: [],
+    viewingSession: null,
+    sessions: [],
+    scheduledTasks: [],
   });
 
   const messagesRef = useRef(state.messages);
@@ -45,36 +51,27 @@ export function useBackend() {
 
   // Load initial snapshot
   useEffect(() => {
+    const applySnapshot = (snapshot: AppSnapshot) => {
+      setState((prev) => ({
+        ...prev,
+        messages: snapshot.messages,
+        personaName: snapshot.persona_name,
+        modelName: snapshot.model_name,
+        status: snapshot.status,
+        toolActivity: snapshot.tool_activity,
+        agentBusy: snapshot.agent_busy,
+        sessions: snapshot.sessions ?? [],
+        scheduledTasks: snapshot.scheduled_tasks ?? [],
+        snapshot,
+      }));
+    };
     invoke<AppSnapshot>("get_initial_snapshot")
-      .then((snapshot) => {
-        setState((prev) => ({
-          ...prev,
-          messages: snapshot.messages,
-          personaName: snapshot.persona_name,
-          modelName: snapshot.model_name,
-          status: snapshot.status,
-          toolActivity: snapshot.tool_activity,
-          agentBusy: snapshot.agent_busy,
-          snapshot,
-        }));
-      })
+      .then(applySnapshot)
       .catch((err) => {
         console.error("Failed to get initial snapshot:", err);
-        // Retry after a short delay (engine may still be starting)
         setTimeout(() => {
           invoke<AppSnapshot>("get_initial_snapshot")
-            .then((snapshot) => {
-              setState((prev) => ({
-                ...prev,
-                messages: snapshot.messages,
-                personaName: snapshot.persona_name,
-                modelName: snapshot.model_name,
-                status: snapshot.status,
-                toolActivity: snapshot.tool_activity,
-                agentBusy: snapshot.agent_busy,
-                snapshot,
-              }));
-            })
+            .then(applySnapshot)
             .catch(console.error);
         }, 1000);
       });
@@ -179,6 +176,15 @@ export function useBackend() {
         const newLogs = [...prev.debugLogs, entry].slice(-200);
         return { ...prev, debugLogs: newLogs };
       }
+      if ("SessionLoaded" in evt) {
+        return { ...prev, viewingSession: evt.SessionLoaded };
+      }
+      if ("SessionsUpdated" in evt) {
+        return { ...prev, sessions: evt.SessionsUpdated };
+      }
+      if ("SchedulesUpdated" in evt) {
+        return { ...prev, scheduledTasks: evt.SchedulesUpdated };
+      }
       return prev;
     });
   }, []);
@@ -211,6 +217,27 @@ export function useBackend() {
     await invoke("api_key_delete", { name });
   }, []);
 
+  const loadSession = useCallback(async (sessionId: string) => {
+    await invoke("load_session", { sessionId });
+  }, []);
+
+  const deleteSession = useCallback(async (sessionId: string) => {
+    setState((prev) => ({ ...prev, viewingSession: null }));
+    await invoke("delete_session", { sessionId });
+  }, []);
+
+  const createSchedule = useCallback(async (name: string, schedule: Schedule, flow: FlowDefinition) => {
+    await invoke("schedule_create", { name, schedule, flow });
+  }, []);
+
+  const deleteSchedule = useCallback(async (taskId: string) => {
+    await invoke("schedule_delete", { taskId });
+  }, []);
+
+  const toggleSchedule = useCallback(async (taskId: string) => {
+    await invoke("schedule_toggle", { taskId });
+  }, []);
+
   return {
     ...state,
     sendMessage,
@@ -218,5 +245,10 @@ export function useBackend() {
     switchModel,
     addApiKey,
     deleteApiKey,
+    loadSession,
+    deleteSession,
+    createSchedule,
+    deleteSchedule,
+    toggleSchedule,
   };
 }

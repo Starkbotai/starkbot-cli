@@ -10,6 +10,8 @@ use starkbot_graph::build_skill_graph;
 use starkbot_skills::SkillRegistry;
 use starkbot_tools::approval::{self, ApprovalMode};
 use starkbot_config::keys::KeyStore;
+use starkbot_config::sessions;
+use starkbot_config::schedules;
 use starkbot_config::AppConfig;
 
 use std::collections::HashMap;
@@ -55,6 +57,11 @@ pub struct StarkbotEngine {
     available_models: Vec<String>,
     graph_nodes: Vec<GraphNodeDto>,
     graph_edges: Vec<GraphEdgeDto>,
+
+    // Sessions & schedules
+    sessions: Vec<SessionSummary>,
+    scheduled_tasks: Vec<ScheduledTaskSummary>,
+    current_session_id: Option<String>,
 
     // Approval tracking (shared with async tasks)
     pending_approvals: PendingApprovals,
@@ -224,6 +231,10 @@ impl StarkbotEngine {
             "gpt-5.5".to_string(),
         ];
 
+        // Load sessions and schedules
+        let session_list = sessions::list_sessions(&app_config.sessions_dir());
+        let schedule_list = schedules::list_schedules(&app_config.schedules_dir());
+
         Ok(Self {
             persona,
             api_key,
@@ -243,6 +254,9 @@ impl StarkbotEngine {
             available_models,
             graph_nodes,
             graph_edges,
+            sessions: session_list,
+            scheduled_tasks: schedule_list,
+            current_session_id: None,
             pending_approvals: Arc::new(Mutex::new(HashMap::new())),
             approval_counter: Arc::new(Mutex::new(0)),
         })
@@ -325,6 +339,9 @@ impl crate::backend::Backend for StarkbotEngine {
         let mut agent_busy = false;
         #[allow(unused_assignments)]
         let mut api_keys_cache = self.api_keys.clone();
+        let mut current_session_id: Option<String> = None;
+        let mut session_created_at: Option<String> = None;
+        let persona_name_for_session = persona.name().to_string();
 
         let event_tx_clone = event_tx.clone();
 
@@ -364,6 +381,14 @@ impl crate::backend::Backend for StarkbotEngine {
                                 }
 
                                 messages.push(ChatMessageDto { role: "user".to_string(), content: content.clone() });
+
+                                // Start a session if none exists
+                                if current_session_id.is_none() {
+                                    let id = uuid::Uuid::new_v4().to_string();
+                                    current_session_id = Some(id);
+                                    session_created_at = Some(chrono::Local::now().to_rfc3339());
+                                }
+
                                 emit(&BackendEvent::StatusUpdate { busy: true, message: "Agent thinking...".to_string() });
                                 agent_busy = true;
 
@@ -509,6 +534,10 @@ impl crate::backend::Backend for StarkbotEngine {
                             }
 
                             FrontendCommand::SlashCommand { command } => {
+                                if command.trim() == "/clear" {
+                                    current_session_id = None;
+                                    session_created_at = None;
+                                }
                                 handle_slash_command(&command, &mut messages, &mut tool_activity, &mut agent_state, &event_tx);
                             }
 
@@ -517,6 +546,63 @@ impl crate::backend::Backend for StarkbotEngine {
                                 // Note: some fields (skills, personas, graph) are static after init
                                 // We send a snapshot event
                                 emit(&BackendEvent::Info { message: "Snapshot requested".to_string() });
+                            }
+
+                            FrontendCommand::LoadSession { session_id } => {
+                                if let Some(session) = sessions::load_session(&app_config.sessions_dir(), &session_id) {
+                                    let _ = event_tx.send(BackendEvent::SessionLoaded(Box::new(session)));
+                                } else {
+                                    let _ = event_tx.send(BackendEvent::Error { message: format!("Failed to load session {}", session_id) });
+                                }
+                            }
+
+                            FrontendCommand::DeleteSession { session_id } => {
+                                // Clear current session ID if it matches the deleted one
+                                if current_session_id.as_deref() == Some(&session_id) {
+                                    current_session_id = None;
+                                    session_created_at = None;
+                                }
+                                sessions::delete_session(&app_config.sessions_dir(), &session_id);
+                                let updated = sessions::list_sessions(&app_config.sessions_dir());
+                                let _ = event_tx.send(BackendEvent::SessionsUpdated(updated));
+                            }
+
+                            FrontendCommand::ScheduleCreate { name, schedule, flow } => {
+                                // Validate schedule interval
+                                let interval_ok = match &schedule {
+                                    starkbot_config::schedules::Schedule::EveryMinutes(v) => *v > 0,
+                                    starkbot_config::schedules::Schedule::EveryHours(v) => *v > 0,
+                                };
+                                if !interval_ok {
+                                    let _ = event_tx.send(BackendEvent::Error { message: "Schedule interval must be > 0".to_string() });
+                                    continue;
+                                }
+                                let task = ScheduledTask {
+                                    id: uuid::Uuid::new_v4().to_string(),
+                                    name,
+                                    schedule,
+                                    flow,
+                                    created_at: chrono::Local::now().to_rfc3339(),
+                                    enabled: true,
+                                };
+                                let _ = schedules::save_schedule(&app_config.schedules_dir(), &task);
+                                let updated = schedules::list_schedules(&app_config.schedules_dir());
+                                let _ = event_tx.send(BackendEvent::SchedulesUpdated(updated));
+                            }
+
+                            FrontendCommand::ScheduleDelete { task_id } => {
+                                schedules::delete_schedule(&app_config.schedules_dir(), &task_id);
+                                let updated = schedules::list_schedules(&app_config.schedules_dir());
+                                let _ = event_tx.send(BackendEvent::SchedulesUpdated(updated));
+                            }
+
+                            FrontendCommand::ScheduleToggle { task_id } => {
+                                if let Some(mut task) = schedules::load_schedule(&app_config.schedules_dir(), &task_id) {
+                                    task.enabled = !task.enabled;
+                                    let _ = schedules::save_schedule(&app_config.schedules_dir(), &task);
+                                    let updated = schedules::list_schedules(&app_config.schedules_dir());
+                                    let _ = event_tx.send(BackendEvent::SchedulesUpdated(updated));
+                                }
                             }
 
                             FrontendCommand::Shutdown => {
@@ -587,6 +673,37 @@ impl crate::backend::Backend for StarkbotEngine {
                                         role: "assistant".to_string(),
                                         content: answer.clone(),
                                     });
+
+                                    // Save session to disk
+                                    if let Some(ref sid) = current_session_id {
+                                        let title = messages.iter()
+                                            .find(|m| m.role == "user")
+                                            .map(|m| {
+                                                let trimmed = m.content.trim();
+                                                if trimmed.is_empty() { return "Untitled".to_string(); }
+                                                let t: String = trimmed.chars().take(60).collect();
+                                                if trimmed.chars().count() > 60 { format!("{}...", t) } else { t }
+                                            })
+                                            .unwrap_or_else(|| "Untitled".to_string());
+                                        let session_msgs: Vec<starkbot_config::sessions::ChatSessionMessage> = messages.iter()
+                                            .filter(|m| m.role == "user" || m.role == "assistant")
+                                            .map(|m| starkbot_config::sessions::ChatSessionMessage {
+                                                role: m.role.clone(),
+                                                content: m.content.clone(),
+                                            })
+                                            .collect();
+                                        let session = starkbot_config::sessions::ChatSession {
+                                            id: sid.clone(),
+                                            persona: persona_name_for_session.clone(),
+                                            title,
+                                            created_at: session_created_at.clone().unwrap_or_else(|| chrono::Local::now().to_rfc3339()),
+                                            messages: session_msgs,
+                                        };
+                                        let _ = starkbot_config::sessions::save_session(&app_config.sessions_dir(), &session);
+                                        let updated = starkbot_config::sessions::list_sessions(&app_config.sessions_dir());
+                                        let _ = event_tx.send(BackendEvent::SessionsUpdated(updated));
+                                    }
+
                                     emit(&BackendEvent::StatusUpdate { busy: false, message: "Ready".to_string() });
                                 }
                                 BackendEvent::Error { message } => {
@@ -652,6 +769,12 @@ impl crate::backend::Backend for StarkbotEngine {
             available_models: self.available_models.clone(),
             graph_nodes: self.graph_nodes.clone(),
             graph_edges: self.graph_edges.clone(),
+            skills_dir: self.app_config.skills_dir().display().to_string(),
+            agents_dir: self.app_config.agents_dir().display().to_string(),
+            sessions: self.sessions.clone(),
+            scheduled_tasks: self.scheduled_tasks.clone(),
+            sessions_dir: self.app_config.sessions_dir().display().to_string(),
+            schedules_dir: self.app_config.schedules_dir().display().to_string(),
         }
     }
 

@@ -47,6 +47,52 @@ async fn api_key_delete(name: String, state: tauri::State<'_, Arc<AppState>>) ->
         .map_err(|e| format!("Failed to send: {}", e))
 }
 
+/// Tauri command: load a saved chat session.
+#[tauri::command]
+async fn load_session(session_id: String, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::LoadSession { session_id })
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
+/// Tauri command: delete a saved chat session.
+#[tauri::command]
+async fn delete_session(session_id: String, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::DeleteSession { session_id })
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
+/// Tauri command: create a scheduled task.
+#[tauri::command]
+async fn schedule_create(
+    name: String,
+    schedule: starkbot_api::types::Schedule,
+    flow: starkbot_api::types::FlowDefinition,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::ScheduleCreate { name, schedule, flow })
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
+/// Tauri command: delete a scheduled task.
+#[tauri::command]
+async fn schedule_delete(task_id: String, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::ScheduleDelete { task_id })
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
+/// Tauri command: toggle a scheduled task's enabled state.
+#[tauri::command]
+async fn schedule_toggle(task_id: String, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::ScheduleToggle { task_id })
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
+/// Tauri command: open a folder in the OS file manager.
+#[tauri::command]
+async fn open_folder(path: String) -> Result<(), String> {
+    open::that(&path).map_err(|e| e.to_string())
+}
+
 /// Tauri command: request a state snapshot.
 #[tauri::command]
 async fn request_snapshot(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
@@ -176,6 +222,12 @@ fn main() {
             api_key_delete,
             request_snapshot,
             get_initial_snapshot,
+            open_folder,
+            load_session,
+            delete_session,
+            schedule_create,
+            schedule_delete,
+            schedule_toggle,
         ])
         .run(tauri::generate_context!("tauri.conf.json"))
         .expect("error while running tauri application");

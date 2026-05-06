@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Tabs, Wrap};
 
 use starkbot_api::events::{BackendEvent, FrontendCommand};
-use starkbot_api::types::AppSnapshot;
+use starkbot_api::types::{AppSnapshot, SessionSummary, ScheduledTaskSummary, ChatSession, ScheduledTask};
 use starkbot_core::persona::Persona;
 use starkbot_graph::{GraphData, GraphWidget, Viewport};
 use starkbot_skills::Skill;
@@ -23,13 +23,15 @@ pub enum ActiveView {
     Graph,
     Personas,
     Memory,
+    Data,
+    Scheduling,
     ApiKeys,
     Settings,
 }
 
 impl ActiveView {
     pub fn titles() -> Vec<&'static str> {
-        vec!["Chat", "Skills", "Graph", "Personas", "Memory", "API Keys", "Settings"]
+        vec!["Chat", "Skills", "Graph", "Personas", "Memory", "Data", "Scheduling", "API Keys", "Settings"]
     }
 
     pub fn index(&self) -> usize {
@@ -39,8 +41,10 @@ impl ActiveView {
             Self::Graph => 2,
             Self::Personas => 3,
             Self::Memory => 4,
-            Self::ApiKeys => 5,
-            Self::Settings => 6,
+            Self::Data => 5,
+            Self::Scheduling => 6,
+            Self::ApiKeys => 7,
+            Self::Settings => 8,
         }
     }
 
@@ -50,14 +54,16 @@ impl ActiveView {
             2 => Self::Graph,
             3 => Self::Personas,
             4 => Self::Memory,
-            5 => Self::ApiKeys,
-            6 => Self::Settings,
+            5 => Self::Data,
+            6 => Self::Scheduling,
+            7 => Self::ApiKeys,
+            8 => Self::Settings,
             _ => Self::Chat,
         }
     }
 
     pub fn next(&self) -> Self {
-        Self::from_index((self.index() + 1) % 7)
+        Self::from_index((self.index() + 1) % 9)
     }
 }
 
@@ -81,6 +87,42 @@ pub struct PendingApproval {
     pub request_id: String,
     pub tool_name: String,
     pub args_display: String,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum SettingsSection {
+    AgentModel,
+}
+
+impl SettingsSection {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::AgentModel => "Agent Model",
+        }
+    }
+
+    pub fn all() -> &'static [SettingsSection] {
+        &[SettingsSection::AgentModel]
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum SettingsFocus {
+    Sidebar,
+    Content,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum DataFocus {
+    Sidebar,
+    SessionList,
+    Detail,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum ScheduleFocus {
+    List,
+    Detail,
 }
 
 /// TUI application state.
@@ -116,6 +158,22 @@ pub struct TuiState {
     pub pending_approval: Option<PendingApproval>,
     // Chat scroll: offset from bottom (0 = pinned to bottom, higher = scrolled up)
     pub chat_scroll_up: u16,
+    // Directory paths for open-folder
+    pub skills_dir: PathBuf,
+    pub agents_dir: PathBuf,
+    // Settings sidebar
+    pub settings_section: SettingsSection,
+    pub settings_focus: SettingsFocus,
+    // Data (sessions) state
+    pub sessions: Vec<SessionSummary>,
+    pub selected_session: usize,
+    pub viewing_session: Option<ChatSession>,
+    pub data_focus: DataFocus,
+    // Scheduling state
+    pub scheduled_tasks: Vec<ScheduledTaskSummary>,
+    pub selected_schedule: usize,
+    pub viewing_schedule: Option<ScheduledTask>,
+    pub schedule_focus: ScheduleFocus,
 }
 
 impl TuiState {
@@ -155,6 +213,18 @@ impl TuiState {
             selected_model,
             pending_approval: None,
             chat_scroll_up: 0,
+            skills_dir: PathBuf::new(),
+            agents_dir: PathBuf::new(),
+            settings_section: SettingsSection::AgentModel,
+            settings_focus: SettingsFocus::Content,
+            sessions: vec![],
+            selected_session: 0,
+            viewing_session: None,
+            data_focus: DataFocus::SessionList,
+            scheduled_tasks: vec![],
+            selected_schedule: 0,
+            viewing_schedule: None,
+            schedule_focus: ScheduleFocus::List,
         }
     }
 
@@ -239,6 +309,18 @@ impl TuiState {
             selected_model,
             pending_approval: None,
             chat_scroll_up: 0,
+            skills_dir: PathBuf::from(&snapshot.skills_dir),
+            agents_dir: PathBuf::from(&snapshot.agents_dir),
+            settings_section: SettingsSection::AgentModel,
+            settings_focus: SettingsFocus::Content,
+            sessions: snapshot.sessions.clone(),
+            selected_session: 0,
+            viewing_session: None,
+            data_focus: DataFocus::SessionList,
+            scheduled_tasks: snapshot.scheduled_tasks.clone(),
+            selected_schedule: 0,
+            viewing_schedule: None,
+            schedule_focus: ScheduleFocus::List,
         }
     }
 
@@ -296,6 +378,25 @@ impl TuiState {
             BackendEvent::DebugLog { .. } => {
                 // Debug logs are for GUI only
             }
+            BackendEvent::SessionLoaded(session) => {
+                self.viewing_session = Some(*session.clone());
+            }
+            BackendEvent::SessionsUpdated(sessions) => {
+                self.sessions = sessions.clone();
+                if self.sessions.is_empty() {
+                    self.selected_session = 0;
+                } else if self.selected_session >= self.sessions.len() {
+                    self.selected_session = self.sessions.len() - 1;
+                }
+            }
+            BackendEvent::SchedulesUpdated(tasks) => {
+                self.scheduled_tasks = tasks.clone();
+                if self.scheduled_tasks.is_empty() {
+                    self.selected_schedule = 0;
+                } else if self.selected_schedule >= self.scheduled_tasks.len() {
+                    self.selected_schedule = self.scheduled_tasks.len() - 1;
+                }
+            }
         }
     }
 
@@ -332,6 +433,8 @@ pub fn handle_key(state: &mut TuiState, key: KeyEvent) -> Option<FrontendCommand
         ActiveView::Graph => { handle_graph_key(state, key); None }
         ActiveView::Personas => { handle_personas_key(state, key); None }
         ActiveView::Memory => { handle_memory_key(state, key); None }
+        ActiveView::Data => handle_data_key(state, key),
+        ActiveView::Scheduling => handle_scheduling_key(state, key),
         ActiveView::ApiKeys => handle_api_keys_key(state, key),
         ActiveView::Settings => handle_settings_key(state, key),
     }
@@ -425,6 +528,9 @@ fn handle_skills_key(state: &mut TuiState, key: KeyEvent) {
                 state.selected_skill = (state.selected_skill + 1).min(state.skill_names.len() - 1);
             }
         }
+        KeyCode::Char('o') => {
+            let _ = open::that(&state.skills_dir);
+        }
         _ => {}
     }
 }
@@ -439,6 +545,9 @@ fn handle_personas_key(state: &mut TuiState, key: KeyEvent) {
             if !state.personas.is_empty() {
                 state.selected_persona = (state.selected_persona + 1).min(state.personas.len() - 1);
             }
+        }
+        KeyCode::Char('o') => {
+            let _ = open::that(&state.agents_dir);
         }
         _ => {}
     }
@@ -543,24 +652,121 @@ fn handle_api_keys_key(state: &mut TuiState, key: KeyEvent) -> Option<FrontendCo
     None
 }
 
-fn handle_settings_key(state: &mut TuiState, key: KeyEvent) -> Option<FrontendCommand> {
+fn handle_data_key(state: &mut TuiState, key: KeyEvent) -> Option<FrontendCommand> {
     match key.code {
-        KeyCode::Tab => state.active_view = state.active_view.next(),
+        KeyCode::Tab => { state.active_view = state.active_view.next(); }
+        KeyCode::Char('h') | KeyCode::Left => {
+            state.data_focus = match state.data_focus {
+                DataFocus::Detail => DataFocus::SessionList,
+                DataFocus::SessionList => DataFocus::Sidebar,
+                DataFocus::Sidebar => DataFocus::Sidebar,
+            };
+        }
+        KeyCode::Char('l') | KeyCode::Right => {
+            state.data_focus = match state.data_focus {
+                DataFocus::Sidebar => DataFocus::SessionList,
+                DataFocus::SessionList => DataFocus::Detail,
+                DataFocus::Detail => DataFocus::Detail,
+            };
+        }
         KeyCode::Up | KeyCode::Char('k') => {
-            state.selected_model = state.selected_model.saturating_sub(1);
+            if state.data_focus == DataFocus::SessionList {
+                state.selected_session = state.selected_session.saturating_sub(1);
+            }
         }
         KeyCode::Down | KeyCode::Char('j') => {
-            if !state.available_models.is_empty() {
-                state.selected_model = (state.selected_model + 1).min(state.available_models.len() - 1);
+            if state.data_focus == DataFocus::SessionList && !state.sessions.is_empty() {
+                state.selected_session = (state.selected_session + 1).min(state.sessions.len() - 1);
             }
         }
         KeyCode::Enter => {
-            if state.selected_model < state.available_models.len() {
-                let new_model = &state.available_models[state.selected_model];
-                if *new_model != state.model_name {
-                    return Some(FrontendCommand::SwitchModel {
-                        model: new_model.clone(),
-                    });
+            if state.data_focus == DataFocus::SessionList && state.selected_session < state.sessions.len() {
+                let id = state.sessions[state.selected_session].id.clone();
+                state.data_focus = DataFocus::Detail;
+                return Some(FrontendCommand::LoadSession { session_id: id });
+            }
+        }
+        KeyCode::Char('d') => {
+            if state.data_focus == DataFocus::SessionList && state.selected_session < state.sessions.len() {
+                let id = state.sessions[state.selected_session].id.clone();
+                state.viewing_session = None;
+                return Some(FrontendCommand::DeleteSession { session_id: id });
+            }
+        }
+        _ => {}
+    }
+    None
+}
+
+fn handle_scheduling_key(state: &mut TuiState, key: KeyEvent) -> Option<FrontendCommand> {
+    match key.code {
+        KeyCode::Tab => { state.active_view = state.active_view.next(); }
+        KeyCode::Char('h') | KeyCode::Left => {
+            state.schedule_focus = ScheduleFocus::List;
+        }
+        KeyCode::Char('l') | KeyCode::Right => {
+            state.schedule_focus = ScheduleFocus::Detail;
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if state.schedule_focus == ScheduleFocus::List {
+                state.selected_schedule = state.selected_schedule.saturating_sub(1);
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if state.schedule_focus == ScheduleFocus::List && !state.scheduled_tasks.is_empty() {
+                state.selected_schedule = (state.selected_schedule + 1).min(state.scheduled_tasks.len() - 1);
+            }
+        }
+        KeyCode::Char('d') => {
+            if state.schedule_focus == ScheduleFocus::List && state.selected_schedule < state.scheduled_tasks.len() {
+                let id = state.scheduled_tasks[state.selected_schedule].id.clone();
+                state.viewing_schedule = None;
+                return Some(FrontendCommand::ScheduleDelete { task_id: id });
+            }
+        }
+        KeyCode::Char('e') => {
+            if state.schedule_focus == ScheduleFocus::List && state.selected_schedule < state.scheduled_tasks.len() {
+                let id = state.scheduled_tasks[state.selected_schedule].id.clone();
+                return Some(FrontendCommand::ScheduleToggle { task_id: id });
+            }
+        }
+        _ => {}
+    }
+    None
+}
+
+fn handle_settings_key(state: &mut TuiState, key: KeyEvent) -> Option<FrontendCommand> {
+    match key.code {
+        KeyCode::Tab => state.active_view = state.active_view.next(),
+        KeyCode::Char('h') | KeyCode::Left if state.settings_focus == SettingsFocus::Content => {
+            state.settings_focus = SettingsFocus::Sidebar;
+        }
+        KeyCode::Char('l') | KeyCode::Right if state.settings_focus == SettingsFocus::Sidebar => {
+            state.settings_focus = SettingsFocus::Content;
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if state.settings_focus == SettingsFocus::Content {
+                state.selected_model = state.selected_model.saturating_sub(1);
+            }
+            // Sidebar: only one section for now, no-op
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if state.settings_focus == SettingsFocus::Content {
+                if !state.available_models.is_empty() {
+                    state.selected_model = (state.selected_model + 1).min(state.available_models.len() - 1);
+                }
+            }
+            // Sidebar: only one section for now, no-op
+        }
+        KeyCode::Enter => {
+            if state.settings_focus == SettingsFocus::Content {
+                if state.selected_model < state.available_models.len() {
+                    let new_model = &state.available_models[state.selected_model];
+                    if *new_model != state.model_name {
+                        return Some(FrontendCommand::SwitchModel {
+                            model: new_model.clone(),
+                        });
+                    }
                 }
             }
         }
@@ -599,6 +805,8 @@ pub fn draw(frame: &mut ratatui::Frame, state: &TuiState) {
         ActiveView::Graph => draw_graph(frame, state, chunks[1]),
         ActiveView::Personas => draw_personas(frame, state, chunks[1]),
         ActiveView::Memory => draw_memory(frame, state, chunks[1]),
+        ActiveView::Data => draw_data(frame, state, chunks[1]),
+        ActiveView::Scheduling => draw_scheduling(frame, state, chunks[1]),
         ActiveView::ApiKeys => draw_api_keys(frame, state, chunks[1]),
         ActiveView::Settings => draw_settings(frame, state, chunks[1]),
     }
@@ -872,7 +1080,8 @@ fn draw_skills(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
         Line::from(Span::styled(format!("{}{}", marker, name), style))
     }).collect();
     let list = Paragraph::new(items)
-        .block(Block::default().borders(Borders::ALL).title(" Skills "));
+        .block(Block::default().borders(Borders::ALL).title(" Skills ")
+            .title_bottom(Line::from(" o: Open folder ").right_aligned()));
     frame.render_widget(list, chunks[0]);
 
     let detail_text = if state.skills.is_empty() {
@@ -927,7 +1136,8 @@ fn draw_personas(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
         Line::from(Span::styled(label, style))
     }).collect();
     let list = Paragraph::new(items)
-        .block(Block::default().borders(Borders::ALL).title(" Personas "));
+        .block(Block::default().borders(Borders::ALL).title(" Personas ")
+            .title_bottom(Line::from(" o: Open folder ").right_aligned()));
     frame.render_widget(list, chunks[0]);
 
     let detail_text = if state.personas.is_empty() {
@@ -983,6 +1193,211 @@ fn draw_memory(frame: &mut ratatui::Frame, _state: &TuiState, area: Rect) {
         .block(Block::default().borders(Borders::ALL).title(" Memory "))
         .wrap(Wrap { trim: false });
     frame.render_widget(placeholder, area);
+}
+
+fn format_schedule(schedule: &starkbot_api::types::Schedule) -> String {
+    match schedule {
+        starkbot_api::types::Schedule::EveryMinutes(m) => format!("every {}m", m),
+        starkbot_api::types::Schedule::EveryHours(h) => format!("every {}h", h),
+    }
+}
+
+fn draw_data(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(18),     // Pill sidebar
+            Constraint::Percentage(35), // Session list
+            Constraint::Percentage(65), // Detail
+        ])
+        .split(area);
+
+    // Pill sidebar
+    let sidebar_focused = state.data_focus == DataFocus::Sidebar;
+    let mut pill_lines: Vec<Line> = vec![Line::from("")];
+    let style = if sidebar_focused {
+        Style::default().fg(Color::Black).bg(Color::Cyan).bold()
+    } else {
+        Style::default().fg(Color::Cyan).bold()
+    };
+    pill_lines.push(Line::from(Span::styled(" Chat Sessions ", style)));
+    pill_lines.push(Line::from(""));
+    let sidebar_border = if sidebar_focused { Color::Cyan } else { Color::DarkGray };
+    let sidebar = Paragraph::new(pill_lines)
+        .block(Block::default().borders(Borders::ALL).title(" Data ")
+            .border_style(Style::default().fg(sidebar_border)));
+    frame.render_widget(sidebar, chunks[0]);
+
+    // Session list
+    let list_focused = state.data_focus == DataFocus::SessionList;
+    let mut items: Vec<Line> = vec![];
+    if state.sessions.is_empty() {
+        items.push(Line::from(Span::styled("  No saved sessions", Style::default().fg(Color::DarkGray))));
+        items.push(Line::from(Span::styled("  Chat to create one", Style::default().fg(Color::DarkGray))));
+    } else {
+        for (i, s) in state.sessions.iter().enumerate() {
+            let is_selected = i == state.selected_session;
+            let style = if is_selected && list_focused {
+                Style::default().fg(Color::Cyan).bold()
+            } else {
+                Style::default()
+            };
+            let marker = if is_selected { "▸ " } else { "  " };
+            let date_str = s.created_at.get(..10).unwrap_or(&s.created_at);
+            items.push(Line::from(vec![
+                Span::styled(format!("{}{}", marker, truncate_str(&s.title, 30)), style),
+            ]));
+            items.push(Line::from(vec![
+                Span::raw("    "),
+                Span::styled(format!("{} | {} msgs | {}", s.persona, s.message_count, date_str), Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+    }
+    let list_border = if list_focused { Color::Cyan } else { Color::DarkGray };
+    let list = Paragraph::new(items)
+        .block(Block::default().borders(Borders::ALL).title(" Sessions ")
+            .title_bottom(Line::from(" Enter: view | d: delete ").right_aligned())
+            .border_style(Style::default().fg(list_border)));
+    frame.render_widget(list, chunks[1]);
+
+    // Detail
+    let detail_focused = state.data_focus == DataFocus::Detail;
+    let mut detail_lines: Vec<Line> = vec![];
+    if let Some(ref session) = state.viewing_session {
+        for msg in &session.messages {
+            let (prefix, color) = match msg.role.as_str() {
+                "user" => ("[you]", Color::Green),
+                "assistant" => ("[agent]", Color::Cyan),
+                _ => ("[?]", Color::Gray),
+            };
+            let content_lines: Vec<&str> = msg.content.split('\n').collect();
+            for (i, line_text) in content_lines.iter().enumerate() {
+                if i == 0 {
+                    detail_lines.push(Line::from(vec![
+                        Span::styled(format!("{} ", prefix), Style::default().fg(color).bold()),
+                        Span::raw(*line_text),
+                    ]));
+                } else {
+                    detail_lines.push(Line::from(vec![
+                        Span::raw("       "),
+                        Span::raw(*line_text),
+                    ]));
+                }
+            }
+            detail_lines.push(Line::from(""));
+        }
+    } else {
+        detail_lines.push(Line::from(Span::styled("  Select a session to view", Style::default().fg(Color::DarkGray))));
+    }
+    let detail_title = if let Some(ref s) = state.viewing_session {
+        format!(" {} ", truncate_str(&s.title, 40))
+    } else {
+        " Detail ".to_string()
+    };
+    let detail_border = if detail_focused { Color::Cyan } else { Color::DarkGray };
+    let detail = Paragraph::new(detail_lines)
+        .block(Block::default().borders(Borders::ALL).title(detail_title)
+            .border_style(Style::default().fg(detail_border)))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(detail, chunks[2]);
+}
+
+fn draw_scheduling(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .split(area);
+
+    // Task list
+    let list_focused = state.schedule_focus == ScheduleFocus::List;
+    let mut items: Vec<Line> = vec![];
+    if state.scheduled_tasks.is_empty() {
+        items.push(Line::from(Span::styled("  No scheduled tasks", Style::default().fg(Color::DarkGray))));
+        items.push(Line::from(Span::styled("  Create via GUI", Style::default().fg(Color::DarkGray))));
+    } else {
+        for (i, t) in state.scheduled_tasks.iter().enumerate() {
+            let is_selected = i == state.selected_schedule;
+            let style = if is_selected && list_focused {
+                Style::default().fg(Color::Cyan).bold()
+            } else {
+                Style::default()
+            };
+            let marker = if is_selected { "▸ " } else { "  " };
+            let enabled_badge = if t.enabled {
+                Span::styled(" ON ", Style::default().fg(Color::Green))
+            } else {
+                Span::styled(" OFF", Style::default().fg(Color::Red))
+            };
+            items.push(Line::from(vec![
+                Span::styled(format!("{}{}", marker, t.name), style),
+                Span::raw(" "),
+                enabled_badge,
+            ]));
+            items.push(Line::from(vec![
+                Span::raw("    "),
+                Span::styled(
+                    format!("{} | {} nodes", format_schedule(&t.schedule), t.node_count),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]));
+        }
+    }
+    let list_border = if list_focused { Color::Cyan } else { Color::DarkGray };
+    let list = Paragraph::new(items)
+        .block(Block::default().borders(Borders::ALL).title(" Scheduled Tasks ")
+            .title_bottom(Line::from(" d: delete | e: toggle ").right_aligned())
+            .border_style(Style::default().fg(list_border)));
+    frame.render_widget(list, chunks[0]);
+
+    // Detail
+    let detail_focused = state.schedule_focus == ScheduleFocus::Detail;
+    let mut detail_lines: Vec<Line> = vec![];
+    if state.selected_schedule < state.scheduled_tasks.len() {
+        let t = &state.scheduled_tasks[state.selected_schedule];
+        detail_lines.push(Line::from(Span::styled(format!(" Task: {}", t.name), Style::default().fg(Color::White).bold())));
+        detail_lines.push(Line::from(Span::styled(format!(" Schedule: {}", format_schedule(&t.schedule)), Style::default().fg(Color::Yellow))));
+        detail_lines.push(Line::from(Span::styled(format!(" Enabled: {}", if t.enabled { "yes" } else { "no" }), Style::default().fg(if t.enabled { Color::Green } else { Color::Red }))));
+        detail_lines.push(Line::from(Span::styled(format!(" Nodes: {}", t.node_count), Style::default().fg(Color::DarkGray))));
+        detail_lines.push(Line::from(Span::styled(format!(" Created: {}", t.created_at.get(..10).unwrap_or(&t.created_at)), Style::default().fg(Color::DarkGray))));
+        detail_lines.push(Line::from(""));
+
+        // If we have the full task loaded, show flow details
+        if let Some(ref task) = state.viewing_schedule {
+            if task.id == t.id {
+                detail_lines.push(Line::from(Span::styled(" Flow Nodes:", Style::default().fg(Color::Cyan))));
+                for node in &task.flow.nodes {
+                    let type_str = match node.node_type {
+                        starkbot_api::types::FlowNodeType::Prompt => "prompt",
+                        starkbot_api::types::FlowNodeType::Branch => "branch",
+                    };
+                    let data_preview = node.data.to_string();
+                    let data_short = truncate_str(&data_preview, 50);
+                    detail_lines.push(Line::from(vec![
+                        Span::styled(format!("   [{}] ", type_str), Style::default().fg(Color::Yellow)),
+                        Span::raw(data_short),
+                    ]));
+                }
+                if !task.flow.edges.is_empty() {
+                    detail_lines.push(Line::from(""));
+                    detail_lines.push(Line::from(Span::styled(" Flow Edges:", Style::default().fg(Color::Cyan))));
+                    for edge in &task.flow.edges {
+                        detail_lines.push(Line::from(Span::styled(
+                            format!("   {} -> {}", edge.source, edge.target),
+                            Style::default().fg(Color::DarkGray),
+                        )));
+                    }
+                }
+            }
+        }
+    } else {
+        detail_lines.push(Line::from(Span::styled("  Select a task to view", Style::default().fg(Color::DarkGray))));
+    }
+    let detail_border = if detail_focused { Color::Cyan } else { Color::DarkGray };
+    let detail = Paragraph::new(detail_lines)
+        .block(Block::default().borders(Borders::ALL).title(" Details ")
+            .border_style(Style::default().fg(detail_border)))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(detail, chunks[1]);
 }
 
 fn draw_api_keys(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
@@ -1079,27 +1494,57 @@ fn draw_api_keys(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
 fn draw_settings(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .constraints([
+            Constraint::Length(18),     // Pill sidebar
+            Constraint::Percentage(40), // Model list
+            Constraint::Percentage(60), // Detail
+        ])
         .split(area);
 
+    // Pill sidebar
+    let sidebar_focused = state.settings_focus == SettingsFocus::Sidebar;
+    let mut pill_lines: Vec<Line> = vec![Line::from("")];
+    for section in SettingsSection::all() {
+        let is_active = *section == state.settings_section;
+        let style = if is_active && sidebar_focused {
+            Style::default().fg(Color::Black).bg(Color::Cyan).bold()
+        } else if is_active {
+            Style::default().fg(Color::Cyan).bold()
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        pill_lines.push(Line::from(Span::styled(format!(" {} ", section.label()), style)));
+        pill_lines.push(Line::from(""));
+    }
+    let sidebar_border = if sidebar_focused { Color::Cyan } else { Color::DarkGray };
+    let sidebar = Paragraph::new(pill_lines)
+        .block(Block::default().borders(Borders::ALL).title(" Settings ")
+            .border_style(Style::default().fg(sidebar_border)));
+    frame.render_widget(sidebar, chunks[0]);
+
+    // Model list
+    let content_focused = state.settings_focus == SettingsFocus::Content;
     let items: Vec<Line> = state.available_models.iter().enumerate().map(|(i, model)| {
         let is_current = *model == state.model_name;
         let is_selected = i == state.selected_model;
-        let style = if is_selected {
+        let style = if is_selected && content_focused {
             Style::default().fg(Color::Cyan).bold()
         } else if is_current {
             Style::default().fg(Color::Green)
         } else {
             Style::default()
         };
-        let marker = if is_selected { "▸ " } else { "  " };
+        let marker = if is_selected && content_focused { "▸ " } else { "  " };
         let current_tag = if is_current { " (active)" } else { "" };
         Line::from(Span::styled(format!("{}{}{}", marker, model, current_tag), style))
     }).collect();
+    let list_border = if content_focused { Color::Cyan } else { Color::DarkGray };
     let list = Paragraph::new(items)
-        .block(Block::default().borders(Borders::ALL).title(" Models "));
-    frame.render_widget(list, chunks[0]);
+        .block(Block::default().borders(Borders::ALL).title(" Models ")
+            .border_style(Style::default().fg(list_border)));
+    frame.render_widget(list, chunks[1]);
 
+    // Detail
     let mut detail_lines: Vec<Line> = vec![];
     if state.selected_model < state.available_models.len() {
         let model = &state.available_models[state.selected_model];
@@ -1117,6 +1562,7 @@ fn draw_settings(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
         detail_lines.push(Line::from(""));
     }
     detail_lines.push(Line::from(Span::styled(" Shortcuts:", Style::default().fg(Color::Cyan))));
+    detail_lines.push(Line::from("   h/l - Switch sidebar/content"));
     detail_lines.push(Line::from("   j/k - Navigate"));
     detail_lines.push(Line::from("   Enter - Select model"));
     detail_lines.push(Line::from("   Tab - Switch view"));
@@ -1124,5 +1570,5 @@ fn draw_settings(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
     let detail = Paragraph::new(detail_lines)
         .block(Block::default().borders(Borders::ALL).title(" Info "))
         .wrap(Wrap { trim: false });
-    frame.render_widget(detail, chunks[1]);
+    frame.render_widget(detail, chunks[2]);
 }

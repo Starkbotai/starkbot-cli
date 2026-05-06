@@ -5,13 +5,17 @@ import SkillsView from "./components/SkillsView";
 import PersonasView from "./components/PersonasView";
 import SettingsView from "./components/SettingsView";
 import ApiKeysView from "./components/ApiKeysView";
+import DataView from "./components/DataView";
+import SchedulingView from "./components/SchedulingView";
 
-type View = "chat" | "skills" | "personas" | "settings" | "api-keys";
+type View = "chat" | "skills" | "personas" | "data" | "scheduling" | "api-keys" | "settings";
 
 const TABS: { id: View; label: string }[] = [
   { id: "chat", label: "Chat" },
   { id: "skills", label: "Skills" },
   { id: "personas", label: "Personas" },
+  { id: "data", label: "Data" },
+  { id: "scheduling", label: "Scheduling" },
   { id: "api-keys", label: "API Keys" },
   { id: "settings", label: "Settings" },
 ];
@@ -56,6 +60,22 @@ export default function App() {
         {activeView === "chat" && <ChatView backend={backend} />}
         {activeView === "skills" && <SkillsView snapshot={backend.snapshot} />}
         {activeView === "personas" && <PersonasView snapshot={backend.snapshot} />}
+        {activeView === "data" && (
+          <DataView
+            sessions={backend.sessions}
+            viewingSession={backend.viewingSession}
+            onLoadSession={backend.loadSession}
+            onDeleteSession={backend.deleteSession}
+          />
+        )}
+        {activeView === "scheduling" && (
+          <SchedulingView
+            tasks={backend.scheduledTasks}
+            onCreate={backend.createSchedule}
+            onDelete={backend.deleteSchedule}
+            onToggle={backend.toggleSchedule}
+          />
+        )}
         {activeView === "api-keys" && (
           <ApiKeysView
             snapshot={backend.snapshot}

@@ -25,6 +25,12 @@ pub enum BackendEvent {
     Snapshot(Box<crate::types::AppSnapshot>),
     /// Debug log entry for frontends to display.
     DebugLog { timestamp: String, level: String, message: String },
+    /// A chat session was loaded from disk.
+    SessionLoaded(Box<crate::types::ChatSession>),
+    /// The sessions list was updated.
+    SessionsUpdated(Vec<crate::types::SessionSummary>),
+    /// The scheduled tasks list was updated.
+    SchedulesUpdated(Vec<crate::types::ScheduledTaskSummary>),
 }
 
 /// Commands sent from any frontend to the engine.
@@ -46,6 +52,16 @@ pub enum FrontendCommand {
     ApiKeyDelete { name: String },
     /// Request a full state snapshot.
     RequestSnapshot,
+    /// Load a saved chat session.
+    LoadSession { session_id: String },
+    /// Delete a saved chat session.
+    DeleteSession { session_id: String },
+    /// Create a new scheduled task.
+    ScheduleCreate { name: String, schedule: crate::types::Schedule, flow: crate::types::FlowDefinition },
+    /// Delete a scheduled task.
+    ScheduleDelete { task_id: String },
+    /// Toggle a scheduled task's enabled state.
+    ScheduleToggle { task_id: String },
     /// Shutdown the engine.
     Shutdown,
 }
