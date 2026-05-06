@@ -218,6 +218,17 @@ See [docs/current_gaps.md](docs/current_gaps.md) for a detailed gap analysis aga
 6. **Knowledge graph** — impulse map with heartbeat traversal
 7. **Soul system** — self-modifying agent identity
 
+## Releases
+
+Pre-built binaries are available on the [Releases](RELEASES.md) page.
+
+To build release binaries locally:
+
+```bash
+./build-release.sh                  # current platform
+./build-release.sh --target all     # all platforms (requires `cross`)
+```
+
 ## License
 
 MIT
