@@ -106,6 +106,11 @@ fn format_args_display(tool_name: &str, args: &serde_json::Value) -> String {
 }
 
 /// Prompt via channel (TUI mode) — blocks until TUI responds.
+///
+/// Uses `block_in_place` to tell the tokio runtime that this thread will block,
+/// allowing it to move other async tasks (like the engine loop that processes
+/// the approval) to a different worker thread. Without this, the blocking recv
+/// can starve the engine loop and cause a deadlock.
 fn prompt_via_channel(tx: &ApprovalSender, tool_name: &str, args: &serde_json::Value) -> BeforeToolCallAction {
     let request = ApprovalRequest {
         tool_name: tool_name.to_string(),
@@ -115,17 +120,19 @@ fn prompt_via_channel(tx: &ApprovalSender, tool_name: &str, args: &serde_json::V
     // Create a one-shot response channel
     let (resp_tx, resp_rx) = std::sync::mpsc::sync_channel(1);
 
-    // Send request to TUI — if the TUI is gone, deny
-    if tx.send((request, resp_tx)).is_err() {
+    // Send request to TUI — if the TUI is gone, deny.
+    // Use block_in_place so tokio can reschedule the engine loop off this thread.
+    let send_result = tokio::task::block_in_place(|| tx.send((request, resp_tx)));
+    if send_result.is_err() {
         return BeforeToolCallAction::Deny("Approval channel closed".into());
     }
 
     // Block waiting for TUI response
-    match resp_rx.recv() {
+    tokio::task::block_in_place(|| match resp_rx.recv() {
         Ok(true) => BeforeToolCallAction::Proceed,
         Ok(false) => BeforeToolCallAction::Deny(format!("User denied tool '{tool_name}'")),
         Err(_) => BeforeToolCallAction::Deny("Approval response channel closed".into()),
-    }
+    })
 }
 
 /// Prompt via CLI (oneshot mode) — reads from stdin.

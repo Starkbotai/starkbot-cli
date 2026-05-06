@@ -19,6 +19,7 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
   const roleStyles: Record<string, string> = {
     user: "bg-accent/10 border-accent/30",
     assistant: "bg-surface-2 border-surface-3",
+    thinking: "bg-surface-2/50 border-surface-3/50 opacity-60",
     tool: "bg-yellow-900/20 border-yellow-700/30",
     error: "bg-red-900/20 border-red-700/30",
   };
@@ -26,6 +27,7 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
   const roleLabels: Record<string, { text: string; color: string }> = {
     user: { text: "You", color: "text-accent-light" },
     assistant: { text: "Agent", color: "text-cyan-400" },
+    thinking: { text: "Thinking", color: "text-gray-500" },
     tool: { text: "Tool", color: "text-yellow-400" },
     error: { text: "Error", color: "text-red-400" },
   };

@@ -2,7 +2,7 @@ use crate::backend::{BackendConfig, BackendHandle};
 use crate::events::{BackendEvent, FrontendCommand};
 use crate::types::*;
 
-use metalcraft::{AgentMessage, AgentState, RunOutcome};
+use metalcraft::{AgentMessage, AgentState, GuardAction, RunOutcome, StepEvent, StepGuard};
 use starkbot_core::context;
 use starkbot_core::dispatch::AgentRunner;
 use starkbot_core::persona::Persona;
@@ -385,6 +385,9 @@ impl crate::backend::Backend for StarkbotEngine {
                                 let (atx, arx) = mpsc::unbounded_channel::<BackendEvent>();
                                 agent_event_rx = Some(arx);
 
+                                // Build an emitting guard that sends real-time events
+                                let emitting_sg = build_emitting_guard(sg, atx.clone());
+
                                 let (stx, srx) = tokio::sync::oneshot::channel::<AgentState>();
                                 state_rx = Some(srx);
 
@@ -398,38 +401,35 @@ impl crate::backend::Backend for StarkbotEngine {
 
                                     let executor = metalcraft::Executor::new_from_arc(rg)
                                         .max_steps(100)
-                                        .with_step_guard(sg);
+                                        .with_step_guard(emitting_sg);
 
-                                    match executor.run(turn_state, "agent").await {
-                                        Ok(RunOutcome::Completed(state)) => {
+                                    let result = tokio::time::timeout(
+                                        std::time::Duration::from_secs(120),
+                                        executor.run(turn_state, "agent"),
+                                    ).await;
+
+                                    match result {
+                                        Ok(Ok(RunOutcome::Completed(state))) => {
                                             log::info!("[executor] Completed with {} messages", state.messages.len());
                                             let _ = dbg_tx.send(debug_log(format!("Executor completed: {} messages", state.messages.len())));
-                                            for msg in &state.messages {
-                                                match msg {
-                                                    AgentMessage::ToolCall { name, args, .. } => {
-                                                        let args_str = serde_json::to_string(args).unwrap_or_default();
-                                                        let _ = atx.send(BackendEvent::ToolCall { name: name.clone(), args: args_str });
-                                                    }
-                                                    AgentMessage::ToolResult { name, result, .. } => {
-                                                        let success = !result.starts_with("ERROR:");
-                                                        let _ = atx.send(BackendEvent::ToolResult { name: name.clone(), success, preview: result.clone() });
-                                                    }
-                                                    _ => {}
-                                                }
-                                            }
                                             let answer = state.final_answer().unwrap_or("(no answer)").to_string();
                                             let _ = atx.send(BackendEvent::TurnComplete { answer });
                                             let _ = stx.send(state);
                                         }
-                                        Ok(RunOutcome::Interrupted { reason, .. }) => {
+                                        Ok(Ok(RunOutcome::Interrupted { reason, .. })) => {
                                             log::warn!("[executor] Interrupted: {}", reason);
                                             let _ = dbg_tx.send(debug_log(format!("Executor interrupted: {}", reason)));
                                             let _ = atx.send(BackendEvent::Error { message: format!("Interrupted: {}", reason) });
                                         }
-                                        Err(e) => {
+                                        Ok(Err(e)) => {
                                             log::error!("[executor] Error: {}", e);
                                             let _ = dbg_tx.send(debug_log(format!("Executor error: {}", e)));
                                             let _ = atx.send(BackendEvent::Error { message: format!("Error: {}", e) });
+                                        }
+                                        Err(_) => {
+                                            log::error!("[executor] Timed out after 120s");
+                                            let _ = dbg_tx.send(debug_log("Executor timed out after 120s"));
+                                            let _ = atx.send(BackendEvent::Error { message: "Agent timed out after 120 seconds".to_string() });
                                         }
                                     }
                                 });
@@ -561,6 +561,9 @@ impl crate::backend::Backend for StarkbotEngine {
                                             content: format!("{} {} failed: {}", icon, name, truncate_str(preview, 100)),
                                         });
                                     }
+                                }
+                                BackendEvent::ThinkingText { content } => {
+                                    log::info!("[engine] Agent event: ThinkingText ({} chars)", content.len());
                                 }
                                 BackendEvent::TurnComplete { answer } => {
                                     log::info!("[engine] Agent event: TurnComplete ({} chars)", answer.len());
@@ -791,6 +794,55 @@ fn populate_skill_fts(skills_dir: &std::path::Path) {
             .ok();
         }
     }
+}
+
+/// Build a step guard that wraps an inner guard and emits real-time events.
+fn build_emitting_guard(
+    inner: StepGuard<AgentState>,
+    emitter: mpsc::UnboundedSender<BackendEvent>,
+) -> StepGuard<AgentState> {
+    let seen_up_to = Arc::new(Mutex::new(0usize));
+    Arc::new(move |state: &AgentState, event: &StepEvent| {
+        // Log step transitions for debugging hangs
+        log::info!("[guard] Step completed: node={} next={} msgs={}", event.node, event.next, state.messages.len());
+
+        // Emit new messages as events
+        let mut cursor = seen_up_to.lock().unwrap();
+        if *cursor > state.messages.len() {
+            *cursor = 0;
+        }
+        let new_messages = &state.messages[*cursor..];
+        *cursor = state.messages.len();
+        drop(cursor);
+
+        for msg in new_messages {
+            match msg {
+                AgentMessage::ToolCall { name, args, .. } => {
+                    let args_str = serde_json::to_string(args).unwrap_or_default();
+                    let _ = emitter.send(BackendEvent::ToolCall { name: name.clone(), args: args_str });
+                }
+                AgentMessage::ToolResult { name, result, .. } => {
+                    let success = !result.starts_with("ERROR:");
+                    // Truncate preview to avoid flooding the event channel with huge payloads
+                    let preview = if result.len() > 500 {
+                        format!("{}...", &result[..500])
+                    } else {
+                        result.clone()
+                    };
+                    let _ = emitter.send(BackendEvent::ToolResult { name: name.clone(), success, preview });
+                }
+                AgentMessage::Assistant(text) => {
+                    if !text.is_empty() {
+                        let _ = emitter.send(BackendEvent::ThinkingText { content: text.clone() });
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Delegate to inner guard for safety checks
+        inner(state, event)
+    })
 }
 
 /// Create a backend engine from config.

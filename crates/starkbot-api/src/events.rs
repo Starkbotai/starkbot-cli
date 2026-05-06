@@ -9,6 +9,8 @@ pub enum BackendEvent {
     ToolResult { name: String, success: bool, preview: String },
     /// The agent finished its turn.
     TurnComplete { answer: String },
+    /// The agent emitted reasoning/thinking text.
+    ThinkingText { content: String },
     /// An error occurred during agent execution.
     Error { message: String },
     /// A tool needs user approval before proceeding.

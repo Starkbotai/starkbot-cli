@@ -64,6 +64,7 @@ export interface AppSnapshot {
 export type BackendEvent =
   | { ToolCall: { name: string; args: string } }
   | { ToolResult: { name: string; success: boolean; preview: string } }
+  | { ThinkingText: { content: string } }
   | { TurnComplete: { answer: string } }
   | { Error: { message: string } }
   | { ApprovalRequired: { request_id: string; tool_name: string; args_display: string } }

@@ -114,15 +114,27 @@ export function useBackend() {
         const { name, success, preview } = evt.ToolResult;
         const icon = success ? "✓" : "✗";
         const newActivity = [...prev.toolActivity.slice(-19), `${icon} ${name}`];
-        if (!success) {
-          const truncPreview = preview.length > 100 ? preview.slice(0, 100) + "..." : preview;
-          return {
-            ...prev,
-            toolActivity: newActivity,
-            messages: [...prev.messages, { role: "error", content: `${icon} ${name} failed: ${truncPreview}` }],
-          };
+        const truncPreview = preview.length > 100 ? preview.slice(0, 100) + "..." : preview;
+        const role = success ? "tool" : "error";
+        return {
+          ...prev,
+          toolActivity: newActivity,
+          messages: [...prev.messages, { role, content: `${icon} ${name}: ${truncPreview}` }],
+        };
+      }
+      if ("ThinkingText" in evt) {
+        const { content } = evt.ThinkingText;
+        // Append or update last thinking message
+        const lastMsg = prev.messages[prev.messages.length - 1];
+        if (lastMsg && lastMsg.role === "thinking") {
+          const updatedMessages = [...prev.messages];
+          updatedMessages[updatedMessages.length - 1] = { role: "thinking", content: lastMsg.content + content };
+          return { ...prev, messages: updatedMessages };
         }
-        return { ...prev, toolActivity: newActivity };
+        return {
+          ...prev,
+          messages: [...prev.messages, { role: "thinking", content }],
+        };
       }
       if ("TurnComplete" in evt) {
         return {

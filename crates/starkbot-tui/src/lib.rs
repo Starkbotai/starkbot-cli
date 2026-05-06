@@ -286,8 +286,15 @@ impl TuiState {
             BackendEvent::Info { message } => {
                 self.add_message("assistant", message);
             }
+            BackendEvent::ThinkingText { content } => {
+                // In TUI, just show thinking as dimmed assistant text
+                self.add_message("assistant", &format!("[thinking] {}", truncate_str(content, 200)));
+            }
             BackendEvent::Snapshot(_) => {
                 // Full snapshot updates handled separately via from_snapshot
+            }
+            BackendEvent::DebugLog { .. } => {
+                // Debug logs are for GUI only
             }
         }
     }
