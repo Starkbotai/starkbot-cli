@@ -1,0 +1,9 @@
+{
+  "name": "GitHub",
+  "description": "GitHub operations via the gh CLI: repos, PRs, issues, commits, and conventional commits",
+  "icon": "git-branch",
+  "requires": {
+    "api_key": "GITHUB_TOKEN"
+  },
+  "skills": ["github.md"]
+}

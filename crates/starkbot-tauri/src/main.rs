@@ -19,6 +19,13 @@ async fn send_message(content: String, state: tauri::State<'_, Arc<AppState>>) -
         .map_err(|e| format!("Failed to send: {}", e))
 }
 
+/// Tauri command: execute a slash command.
+#[tauri::command]
+async fn slash_command(command: String, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::SlashCommand { command })
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
 /// Tauri command: respond to an approval request.
 #[tauri::command]
 async fn approval_response(request_id: String, approved: bool, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
@@ -61,29 +68,59 @@ async fn delete_session(session_id: String, state: tauri::State<'_, Arc<AppState
         .map_err(|e| format!("Failed to send: {}", e))
 }
 
-/// Tauri command: create a scheduled task.
+/// Tauri command: save a flow definition.
 #[tauri::command]
-async fn schedule_create(
-    name: String,
-    schedule: starkbot_api::types::Schedule,
-    flow: starkbot_api::types::FlowDefinition,
-    state: tauri::State<'_, Arc<AppState>>,
-) -> Result<(), String> {
-    state.cmd_tx.send(FrontendCommand::ScheduleCreate { name, schedule, flow })
+async fn flow_save(flow: starkbot_api::types::SavedFlow, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::FlowSave { flow })
         .map_err(|e| format!("Failed to send: {}", e))
 }
 
-/// Tauri command: delete a scheduled task.
+/// Tauri command: load a flow definition.
 #[tauri::command]
-async fn schedule_delete(task_id: String, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
-    state.cmd_tx.send(FrontendCommand::ScheduleDelete { task_id })
+async fn flow_load(flow_id: String, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::FlowLoad { flow_id })
         .map_err(|e| format!("Failed to send: {}", e))
 }
 
-/// Tauri command: toggle a scheduled task's enabled state.
+/// Tauri command: delete a flow definition.
 #[tauri::command]
-async fn schedule_toggle(task_id: String, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
-    state.cmd_tx.send(FrontendCommand::ScheduleToggle { task_id })
+async fn flow_delete(flow_id: String, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::FlowDelete { flow_id })
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
+/// Tauri command: load flow logs.
+#[tauri::command]
+async fn flow_logs_load(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::FlowLogsLoad)
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
+/// Tauri command: toggle a flow's enabled state.
+#[tauri::command]
+async fn flow_toggle_enabled(flow_id: String, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::FlowToggleEnabled { flow_id })
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
+/// Tauri command: list all saved flows.
+#[tauri::command]
+async fn flow_list(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::FlowList)
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
+/// Tauri command: install an integration preset.
+#[tauri::command]
+async fn integration_install(preset_id: String, api_key: Option<String>, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::IntegrationInstall { preset_id, api_key })
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
+/// Tauri command: uninstall an integration preset.
+#[tauri::command]
+async fn integration_uninstall(preset_id: String, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::IntegrationUninstall { preset_id })
         .map_err(|e| format!("Failed to send: {}", e))
 }
 
@@ -216,6 +253,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             send_message,
+            slash_command,
             approval_response,
             switch_model,
             api_key_add,
@@ -225,9 +263,14 @@ fn main() {
             open_folder,
             load_session,
             delete_session,
-            schedule_create,
-            schedule_delete,
-            schedule_toggle,
+            flow_save,
+            flow_load,
+            flow_delete,
+            flow_list,
+            flow_toggle_enabled,
+            flow_logs_load,
+            integration_install,
+            integration_uninstall,
         ])
         .run(tauri::generate_context!("tauri.conf.json"))
         .expect("error while running tauri application");

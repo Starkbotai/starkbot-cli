@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 pub use starkbot_config::sessions::{ChatSession, ChatSessionMessage, SessionSummary};
 pub use starkbot_config::schedules::{
     FlowNode, FlowNodeType, FlowEdge, FlowDefinition,
-    Schedule, ScheduledTask, ScheduledTaskSummary,
+    SavedFlow, FlowSummary, FlowLogEntry,
 };
 
 /// A chat message DTO.
@@ -63,6 +63,19 @@ pub struct GraphEdgeDto {
     pub weight: f32,
 }
 
+/// Info about an integration preset for display.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntegrationPresetInfo {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub icon: String,
+    pub api_key_name: Option<String>,
+    pub skills: Vec<String>,
+    pub installed: bool,
+    pub configured: bool,
+}
+
 /// Full application state snapshot for frontends.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSnapshot {
@@ -81,7 +94,8 @@ pub struct AppSnapshot {
     pub skills_dir: String,
     pub agents_dir: String,
     pub sessions: Vec<SessionSummary>,
-    pub scheduled_tasks: Vec<ScheduledTaskSummary>,
     pub sessions_dir: String,
-    pub schedules_dir: String,
+    pub flows_dir: String,
+    pub inference_configured: bool,
+    pub integrations: Vec<IntegrationPresetInfo>,
 }

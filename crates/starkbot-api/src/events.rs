@@ -29,8 +29,12 @@ pub enum BackendEvent {
     SessionLoaded(Box<crate::types::ChatSession>),
     /// The sessions list was updated.
     SessionsUpdated(Vec<crate::types::SessionSummary>),
-    /// The scheduled tasks list was updated.
-    SchedulesUpdated(Vec<crate::types::ScheduledTaskSummary>),
+    /// A flow was loaded from disk.
+    FlowLoaded(Box<crate::types::SavedFlow>),
+    /// The flows list was updated.
+    FlowsListed(Vec<crate::types::FlowSummary>),
+    /// Flow logs loaded.
+    FlowLogsLoaded(Vec<crate::types::FlowLogEntry>),
 }
 
 /// Commands sent from any frontend to the engine.
@@ -56,12 +60,22 @@ pub enum FrontendCommand {
     LoadSession { session_id: String },
     /// Delete a saved chat session.
     DeleteSession { session_id: String },
-    /// Create a new scheduled task.
-    ScheduleCreate { name: String, schedule: crate::types::Schedule, flow: crate::types::FlowDefinition },
-    /// Delete a scheduled task.
-    ScheduleDelete { task_id: String },
-    /// Toggle a scheduled task's enabled state.
-    ScheduleToggle { task_id: String },
+    /// Save a flow definition.
+    FlowSave { flow: crate::types::SavedFlow },
+    /// Load a flow definition.
+    FlowLoad { flow_id: String },
+    /// Delete a flow definition.
+    FlowDelete { flow_id: String },
+    /// Toggle a flow's enabled state.
+    FlowToggleEnabled { flow_id: String },
+    /// Load flow logs.
+    FlowLogsLoad,
+    /// List all saved flows.
+    FlowList,
+    /// Install an integration preset.
+    IntegrationInstall { preset_id: String, api_key: Option<String> },
+    /// Uninstall an integration preset.
+    IntegrationUninstall { preset_id: String },
     /// Shutdown the engine.
     Shutdown,
 }

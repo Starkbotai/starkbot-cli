@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useBackend } from "./hooks/useBackend";
 import ChatView from "./components/ChatView";
 import SkillsView from "./components/SkillsView";
@@ -8,17 +9,45 @@ import ApiKeysView from "./components/ApiKeysView";
 import DataView from "./components/DataView";
 import SchedulingView from "./components/SchedulingView";
 
-type View = "chat" | "skills" | "personas" | "data" | "scheduling" | "api-keys" | "settings";
+type View = "chat" | "skills" | "personas" | "data" | "flows" | "api-keys" | "settings";
 
 const TABS: { id: View; label: string }[] = [
   { id: "chat", label: "Chat" },
   { id: "skills", label: "Skills" },
   { id: "personas", label: "Personas" },
   { id: "data", label: "Data" },
-  { id: "scheduling", label: "Scheduling" },
-  { id: "api-keys", label: "API Keys" },
+  { id: "flows", label: "Flows" },
+  { id: "api-keys", label: "Integrations" },
   { id: "settings", label: "Settings" },
 ];
+
+function OpenFolderButton({ view, snapshot }: { view: View; snapshot: any }) {
+  const dir = useMemo(() => {
+    if (!snapshot) return "";
+    switch (view) {
+      case "skills": return snapshot.skills_dir || "";
+      case "personas": return snapshot.agents_dir || "";
+      case "data": return snapshot.sessions_dir || "";
+      case "flows": return snapshot.flows_dir || "";
+      case "api-keys": return snapshot.skills_dir ? snapshot.skills_dir.replace(/\/skills$/, "") : "";
+      case "settings": return snapshot.skills_dir ? snapshot.skills_dir.replace(/\/skills$/, "") : "";
+      default: return "";
+    }
+  }, [view, snapshot]);
+
+  if (!dir) return null;
+
+  return (
+    <button
+      onClick={() => invoke("open_folder", { path: dir })}
+      title="Open folder"
+      className="flex items-center gap-1.5 px-2 py-1 rounded text-xs text-gray-400 hover:text-accent hover:bg-surface-2 transition-colors"
+    >
+      <span>Open</span>
+      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><polyline points="9 14 12 11 15 14"/></svg>
+    </button>
+  );
+}
 
 export default function App() {
   const [activeView, setActiveView] = useState<View>("chat");
@@ -50,30 +79,50 @@ export default function App() {
           </button>
         ))}
         <div className="flex-1" />
-        <span className="text-xs text-gray-500">
-          {backend.personaName} | {backend.modelName}
-        </span>
+        {activeView === "chat" ? (
+          <span className="text-xs text-gray-500">
+            {backend.personaName} | {backend.modelName}
+          </span>
+        ) : (
+          <OpenFolderButton view={activeView} snapshot={backend.snapshot} />
+        )}
       </div>
 
       {/* Main content */}
       <div className="flex-1 overflow-hidden">
-        {activeView === "chat" && <ChatView backend={backend} />}
+        {activeView === "chat" && (
+          <ChatView
+            backend={backend}
+            inferenceConfigured={backend.inferenceConfigured}
+            onNavigateSettings={() => setActiveView("settings")}
+          />
+        )}
         {activeView === "skills" && <SkillsView snapshot={backend.snapshot} />}
         {activeView === "personas" && <PersonasView snapshot={backend.snapshot} />}
         {activeView === "data" && (
           <DataView
             sessions={backend.sessions}
             viewingSession={backend.viewingSession}
+            flowLogs={backend.flowLogs}
             onLoadSession={backend.loadSession}
             onDeleteSession={backend.deleteSession}
+            onResumeSession={(id) => {
+              backend.loadSession(id);
+              setActiveView("chat");
+            }}
+            onLoadFlowLogs={backend.loadFlowLogs}
           />
         )}
-        {activeView === "scheduling" && (
+        {activeView === "flows" && (
           <SchedulingView
-            tasks={backend.scheduledTasks}
-            onCreate={backend.createSchedule}
-            onDelete={backend.deleteSchedule}
-            onToggle={backend.toggleSchedule}
+            flows={backend.flows}
+            editingFlow={backend.editingFlow}
+            onSaveFlow={backend.saveFlow}
+            onLoadFlow={backend.loadFlow}
+            onDeleteFlow={backend.deleteFlow}
+            onToggleFlowEnabled={backend.toggleFlowEnabled}
+            onListFlows={backend.listFlows}
+            onClearEditingFlow={backend.clearEditingFlow}
           />
         )}
         {activeView === "api-keys" && (
@@ -81,6 +130,8 @@ export default function App() {
             snapshot={backend.snapshot}
             onAdd={backend.addApiKey}
             onDelete={backend.deleteApiKey}
+            onInstall={backend.installIntegration}
+            onUninstall={backend.uninstallIntegration}
           />
         )}
         {activeView === "settings" && (
@@ -88,6 +139,7 @@ export default function App() {
             snapshot={backend.snapshot}
             currentModel={backend.modelName}
             onSwitchModel={backend.switchModel}
+            onAddApiKey={backend.addApiKey}
           />
         )}
       </div>

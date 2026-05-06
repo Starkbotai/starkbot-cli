@@ -107,7 +107,8 @@ async fn run_oneshot(
     let app_config = AppConfig::open();
     let bundled_agents = find_bundled_dir("agents");
     let bundled_skills = find_bundled_dir("skills");
-    app_config.ensure_initialized(bundled_agents.as_deref(), bundled_skills.as_deref())
+    let bundled_presets = find_bundled_dir("integration_presets");
+    app_config.ensure_initialized(bundled_agents.as_deref(), bundled_skills.as_deref(), bundled_presets.as_deref())
         .unwrap_or_else(|e| eprintln!("Warning: config init failed: {}", e));
 
     let personas_dir = Persona::default_personas_dir();
@@ -127,13 +128,14 @@ async fn run_oneshot(
         }
     };
 
-    let api_key = match std::env::var("OPENAI_API_KEY") {
-        Ok(key) => key,
-        Err(_) => {
-            let store = KeyStore::load(&app_config.keys_path()).unwrap_or_default();
-            store.get("OPENAI_API_KEY")
-                .map(|s| s.to_string())
-                .expect("OPENAI_API_KEY must be set (env var or keys.json)")
+    let store = KeyStore::load(&app_config.keys_path()).unwrap_or_default();
+    let api_key = match store.get("OPENAI_API_KEY").map(|s| s.to_string()) {
+        Some(key) => key,
+        None => {
+            eprintln!("Error: No OpenAI API key configured.");
+            eprintln!("Configure it in the GUI (Settings > Inference) or run:");
+            eprintln!("  starkbot-cli install_api_key OPENAI_API_KEY <your-key>");
+            std::process::exit(1);
         }
     };
 

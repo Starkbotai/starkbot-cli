@@ -4,6 +4,7 @@ import type { AppSnapshot } from "../types";
 export default function PersonasView({ snapshot }: { snapshot: AppSnapshot | null }) {
   const [selected, setSelected] = useState(0);
   const personas = snapshot?.personas || [];
+  const agentsDir = snapshot?.agents_dir || "";
 
   if (!personas.length) {
     return (

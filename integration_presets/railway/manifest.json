@@ -1,0 +1,9 @@
+{
+  "name": "Railway",
+  "description": "Deploy and manage applications on Railway cloud platform",
+  "icon": "train",
+  "requires": {
+    "api_key": "RAILWAY_TOKEN"
+  },
+  "skills": []
+}

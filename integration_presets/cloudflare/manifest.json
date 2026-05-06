@@ -1,0 +1,9 @@
+{
+  "name": "Cloudflare",
+  "description": "Manage DNS records, zones, and redirect rules via the Cloudflare API",
+  "icon": "cloud",
+  "requires": {
+    "api_key": "CLOUDFLARE_API_TOKEN"
+  },
+  "skills": ["cloudflare-dns.md"]
+}

@@ -12,6 +12,7 @@ use starkbot_tools::approval::{self, ApprovalMode};
 use starkbot_config::keys::KeyStore;
 use starkbot_config::sessions;
 use starkbot_config::schedules;
+use starkbot_config::integrations;
 use starkbot_config::AppConfig;
 
 use std::collections::HashMap;
@@ -58,10 +59,12 @@ pub struct StarkbotEngine {
     graph_nodes: Vec<GraphNodeDto>,
     graph_edges: Vec<GraphEdgeDto>,
 
-    // Sessions & schedules
+    // Sessions
     sessions: Vec<SessionSummary>,
-    scheduled_tasks: Vec<ScheduledTaskSummary>,
     current_session_id: Option<String>,
+
+    // Integrations
+    integrations: Vec<IntegrationPresetInfo>,
 
     // Approval tracking (shared with async tasks)
     pending_approvals: PendingApprovals,
@@ -75,7 +78,8 @@ impl StarkbotEngine {
         // Initialize config
         let bundled_agents = find_bundled_dir("agents");
         let bundled_skills = find_bundled_dir("skills");
-        app_config.ensure_initialized(bundled_agents.as_deref(), bundled_skills.as_deref())
+        let bundled_presets = find_bundled_dir("integration_presets");
+        app_config.ensure_initialized(bundled_agents.as_deref(), bundled_skills.as_deref(), bundled_presets.as_deref())
             .unwrap_or_else(|e| log::warn!("Config init failed: {}", e));
 
         // Migrate old keys
@@ -104,20 +108,15 @@ impl StarkbotEngine {
         )
         .map_err(|e| anyhow::anyhow!("{}", e))?;
 
-        // Resolve API key
+        // Resolve API key (no ENV fallback — must be configured via UI or keys.json)
         let api_key = if !config.api_key.is_empty() {
             config.api_key.clone()
         } else {
-            match std::env::var("OPENAI_API_KEY") {
-                Ok(key) => key,
-                Err(_) => {
-                    let store = KeyStore::load(&app_config.keys_path()).unwrap_or_default();
-                    store
-                        .get("OPENAI_API_KEY")
-                        .map(|s| s.to_string())
-                        .ok_or_else(|| anyhow::anyhow!("OPENAI_API_KEY must be set"))?
-                }
-            }
+            let store = KeyStore::load(&app_config.keys_path()).unwrap_or_default();
+            store
+                .get("OPENAI_API_KEY")
+                .map(|s| s.to_string())
+                .unwrap_or_default()
         };
 
         // Resolve model
@@ -231,9 +230,11 @@ impl StarkbotEngine {
             "gpt-5.5".to_string(),
         ];
 
-        // Load sessions and schedules
+        // Load sessions
         let session_list = sessions::list_sessions(&app_config.sessions_dir());
-        let schedule_list = schedules::list_schedules(&app_config.schedules_dir());
+
+        // Load integrations
+        let integration_list = build_integrations_list(&app_config);
 
         Ok(Self {
             persona,
@@ -255,8 +256,8 @@ impl StarkbotEngine {
             graph_nodes,
             graph_edges,
             sessions: session_list,
-            scheduled_tasks: schedule_list,
             current_session_id: None,
+            integrations: integration_list,
             pending_approvals: Arc::new(Mutex::new(HashMap::new())),
             approval_counter: Arc::new(Mutex::new(0)),
         })
@@ -304,8 +305,10 @@ impl crate::backend::Backend for StarkbotEngine {
         // Create approval channels
         let (approval_tx, approval_rx) = approval::approval_channel();
 
-        // Build runner
-        self.build_runner(&approval_tx)?;
+        // Build runner (skip if no API key configured)
+        if !self.api_key.is_empty() {
+            self.build_runner(&approval_tx)?;
+        }
 
         // Welcome message
         self.add_message(
@@ -329,16 +332,18 @@ impl crate::backend::Backend for StarkbotEngine {
         let app_config = AppConfig::open(); // Re-open since AppConfig isn't Clone
         let skills_dir = self.skills_dir.clone();
         let cwd = self.cwd.clone();
-        let api_key = self.api_key.clone();
+        let mut api_key = self.api_key.clone();
         let mut model_name = self.model_name.clone();
         let auto_approve = self.auto_approve;
-        let mut runner_graph = self.runner.as_ref().unwrap().graph.clone();
-        let mut step_guard = self.runner.as_ref().unwrap().step_guard.clone();
+        let mut runner_graph = self.runner.as_ref().map(|r| r.graph.clone());
+        let mut step_guard = self.runner.as_ref().map(|r| r.step_guard.clone());
         let mut messages = self.messages.clone();
         let mut tool_activity = self.tool_activity.clone();
         let mut agent_busy = false;
         #[allow(unused_assignments)]
         let mut api_keys_cache = self.api_keys.clone();
+        #[allow(unused_assignments)]
+        let mut integrations_cache = self.integrations.clone();
         let mut current_session_id: Option<String> = None;
         let mut session_created_at: Option<String> = None;
         let persona_name_for_session = persona.name().to_string();
@@ -380,6 +385,15 @@ impl crate::backend::Backend for StarkbotEngine {
                                     continue;
                                 }
 
+                                // Check if inference is configured
+                                if runner_graph.is_none() || api_key.is_empty() {
+                                    messages.push(ChatMessageDto { role: "user".to_string(), content: content.clone() });
+                                    let err_msg = "Inference not configured. Add your OpenAI API key in Settings > Inference.".to_string();
+                                    messages.push(ChatMessageDto { role: "error".to_string(), content: err_msg.clone() });
+                                    emit(&BackendEvent::Error { message: err_msg });
+                                    continue;
+                                }
+
                                 messages.push(ChatMessageDto { role: "user".to_string(), content: content.clone() });
 
                                 // Start a session if none exists
@@ -405,8 +419,8 @@ impl crate::backend::Backend for StarkbotEngine {
                                     }
                                 };
 
-                                let rg = runner_graph.clone();
-                                let sg = step_guard.clone();
+                                let rg = runner_graph.clone().unwrap();
+                                let sg = step_guard.clone().unwrap();
                                 let (atx, arx) = mpsc::unbounded_channel::<BackendEvent>();
                                 agent_event_rx = Some(arx);
 
@@ -476,6 +490,10 @@ impl crate::backend::Backend for StarkbotEngine {
                             }
 
                             FrontendCommand::SwitchModel { model } => {
+                                if api_key.is_empty() {
+                                    emit(&BackendEvent::Error { message: "Cannot switch model: no API key configured.".to_string() });
+                                    continue;
+                                }
                                 let am = if auto_approve {
                                     ApprovalMode::AutoApprove
                                 } else {
@@ -484,8 +502,8 @@ impl crate::backend::Backend for StarkbotEngine {
                                 let keys_path = app_config.keys_path();
                                 match AgentRunner::build_for_tui(&persona, &skills_dir, &cwd, &api_key, &model, am, Some(keys_path)) {
                                     Ok(new_runner) => {
-                                        runner_graph = new_runner.graph.clone();
-                                        step_guard = new_runner.step_guard.clone();
+                                        runner_graph = Some(new_runner.graph.clone());
+                                        step_guard = Some(new_runner.step_guard.clone());
                                         model_name = model.clone();
 
                                         if let Ok(mut s) = starkbot_config::settings::Settings::load(&app_config.settings_path()) {
@@ -512,9 +530,32 @@ impl crate::backend::Backend for StarkbotEngine {
                                         api_keys_cache = store.list_masked().into_iter()
                                             .map(|(n, m)| ApiKeyInfo { name: n, masked_key: m })
                                             .collect();
-                                        let msg = format!("API key {} installed.", name);
-                                        messages.push(ChatMessageDto { role: "assistant".to_string(), content: msg.clone() });
-                                        emit(&BackendEvent::Info { message: msg });
+
+                                        // If this is the inference key, rebuild the runner
+                                        if name == "OPENAI_API_KEY" {
+                                            api_key = key.clone();
+                                            let am = if auto_approve {
+                                                ApprovalMode::AutoApprove
+                                            } else {
+                                                ApprovalMode::tui_interactive(approval_tx.clone())
+                                            };
+                                            match AgentRunner::build_for_tui(&persona, &skills_dir, &cwd, &api_key, &model_name, am, Some(keys_path.clone())) {
+                                                Ok(new_runner) => {
+                                                    runner_graph = Some(new_runner.graph.clone());
+                                                    step_guard = Some(new_runner.step_guard.clone());
+                                                    let msg = "Inference configured. You can now start chatting.".to_string();
+                                                    messages.push(ChatMessageDto { role: "assistant".to_string(), content: msg.clone() });
+                                                    emit(&BackendEvent::Info { message: msg });
+                                                }
+                                                Err(e) => {
+                                                    emit(&BackendEvent::Error { message: format!("Failed to configure inference: {}", e) });
+                                                }
+                                            }
+                                        } else {
+                                            let msg = format!("API key {} installed.", name);
+                                            messages.push(ChatMessageDto { role: "assistant".to_string(), content: msg.clone() });
+                                            emit(&BackendEvent::Info { message: msg });
+                                        }
                                     }
                                 }
                             }
@@ -526,9 +567,19 @@ impl crate::backend::Backend for StarkbotEngine {
                                         api_keys_cache = store.list_masked().into_iter()
                                             .map(|(n, m)| ApiKeyInfo { name: n, masked_key: m })
                                             .collect();
-                                        let msg = format!("API key {} deleted.", name);
-                                        messages.push(ChatMessageDto { role: "assistant".to_string(), content: msg.clone() });
-                                        emit(&BackendEvent::Info { message: msg });
+
+                                        if name == "OPENAI_API_KEY" {
+                                            api_key = String::new();
+                                            runner_graph = None;
+                                            step_guard = None;
+                                            let msg = "Inference disabled. Configure an API key in Settings > Inference to continue.".to_string();
+                                            messages.push(ChatMessageDto { role: "assistant".to_string(), content: msg.clone() });
+                                            emit(&BackendEvent::Info { message: msg });
+                                        } else {
+                                            let msg = format!("API key {} deleted.", name);
+                                            messages.push(ChatMessageDto { role: "assistant".to_string(), content: msg.clone() });
+                                            emit(&BackendEvent::Info { message: msg });
+                                        }
                                     }
                                 }
                             }
@@ -567,42 +618,128 @@ impl crate::backend::Backend for StarkbotEngine {
                                 let _ = event_tx.send(BackendEvent::SessionsUpdated(updated));
                             }
 
-                            FrontendCommand::ScheduleCreate { name, schedule, flow } => {
-                                // Validate schedule interval
-                                let interval_ok = match &schedule {
-                                    starkbot_config::schedules::Schedule::EveryMinutes(v) => *v > 0,
-                                    starkbot_config::schedules::Schedule::EveryHours(v) => *v > 0,
-                                };
-                                if !interval_ok {
-                                    let _ = event_tx.send(BackendEvent::Error { message: "Schedule interval must be > 0".to_string() });
-                                    continue;
-                                }
-                                let task = ScheduledTask {
-                                    id: uuid::Uuid::new_v4().to_string(),
-                                    name,
-                                    schedule,
-                                    flow,
-                                    created_at: chrono::Local::now().to_rfc3339(),
-                                    enabled: true,
-                                };
-                                let _ = schedules::save_schedule(&app_config.schedules_dir(), &task);
-                                let updated = schedules::list_schedules(&app_config.schedules_dir());
-                                let _ = event_tx.send(BackendEvent::SchedulesUpdated(updated));
+                            FrontendCommand::FlowSave { flow } => {
+                                let _ = schedules::save_flow(&app_config.flows_dir(), &flow);
+                                schedules::append_flow_log(&app_config.flow_logs_path(), &FlowLogEntry {
+                                    timestamp: chrono::Local::now().to_rfc3339(),
+                                    flow_id: flow.id.clone(),
+                                    flow_name: flow.name.clone(),
+                                    action: "saved".to_string(),
+                                    detail: format!("{} nodes", flow.flow.nodes.len()),
+                                });
+                                let updated = schedules::list_flows(&app_config.flows_dir());
+                                let _ = event_tx.send(BackendEvent::FlowsListed(updated));
                             }
 
-                            FrontendCommand::ScheduleDelete { task_id } => {
-                                schedules::delete_schedule(&app_config.schedules_dir(), &task_id);
-                                let updated = schedules::list_schedules(&app_config.schedules_dir());
-                                let _ = event_tx.send(BackendEvent::SchedulesUpdated(updated));
+                            FrontendCommand::FlowLoad { flow_id } => {
+                                if let Some(flow) = schedules::load_flow(&app_config.flows_dir(), &flow_id) {
+                                    let _ = event_tx.send(BackendEvent::FlowLoaded(Box::new(flow)));
+                                } else {
+                                    let _ = event_tx.send(BackendEvent::Error {
+                                        message: format!("Flow '{}' not found", flow_id),
+                                    });
+                                }
                             }
 
-                            FrontendCommand::ScheduleToggle { task_id } => {
-                                if let Some(mut task) = schedules::load_schedule(&app_config.schedules_dir(), &task_id) {
-                                    task.enabled = !task.enabled;
-                                    let _ = schedules::save_schedule(&app_config.schedules_dir(), &task);
-                                    let updated = schedules::list_schedules(&app_config.schedules_dir());
-                                    let _ = event_tx.send(BackendEvent::SchedulesUpdated(updated));
+                            FrontendCommand::FlowDelete { flow_id } => {
+                                // Log before deleting (so we can capture the name)
+                                if let Some(flow) = schedules::load_flow(&app_config.flows_dir(), &flow_id) {
+                                    schedules::append_flow_log(&app_config.flow_logs_path(), &FlowLogEntry {
+                                        timestamp: chrono::Local::now().to_rfc3339(),
+                                        flow_id: flow.id.clone(),
+                                        flow_name: flow.name.clone(),
+                                        action: "deleted".to_string(),
+                                        detail: String::new(),
+                                    });
                                 }
+                                schedules::delete_flow(&app_config.flows_dir(), &flow_id);
+                                let updated = schedules::list_flows(&app_config.flows_dir());
+                                let _ = event_tx.send(BackendEvent::FlowsListed(updated));
+                            }
+
+                            FrontendCommand::FlowToggleEnabled { flow_id } => {
+                                if let Some(mut flow) = schedules::load_flow(&app_config.flows_dir(), &flow_id) {
+                                    flow.enabled = !flow.enabled;
+                                    let _ = schedules::save_flow(&app_config.flows_dir(), &flow);
+                                    let action = if flow.enabled { "enabled" } else { "disabled" };
+                                    schedules::append_flow_log(&app_config.flow_logs_path(), &FlowLogEntry {
+                                        timestamp: chrono::Local::now().to_rfc3339(),
+                                        flow_id: flow.id.clone(),
+                                        flow_name: flow.name.clone(),
+                                        action: action.to_string(),
+                                        detail: String::new(),
+                                    });
+                                }
+                                let updated = schedules::list_flows(&app_config.flows_dir());
+                                let _ = event_tx.send(BackendEvent::FlowsListed(updated));
+                            }
+
+                            FrontendCommand::FlowLogsLoad => {
+                                let logs = schedules::load_flow_logs(&app_config.flow_logs_path());
+                                let _ = event_tx.send(BackendEvent::FlowLogsLoaded(logs));
+                            }
+
+                            FrontendCommand::FlowList => {
+                                let flows = schedules::list_flows(&app_config.flows_dir());
+                                let _ = event_tx.send(BackendEvent::FlowsListed(flows));
+                            }
+
+                            FrontendCommand::IntegrationInstall { preset_id, api_key: install_key } => {
+                                // Save API key if provided
+                                if let Some(key_value) = install_key {
+                                    let keys_path = app_config.keys_path();
+                                    if let Ok(mut store) = KeyStore::load(&keys_path) {
+                                        // Look up the key name from the manifest
+                                        let presets = integrations::list_presets(&app_config.integration_presets_dir());
+                                        if let Some((_, manifest)) = presets.iter().find(|(id, _)| id == &preset_id) {
+                                            if let Some(ref key_name) = manifest.requires.api_key {
+                                                store.upsert(key_name, &key_value);
+                                                let _ = store.save(&keys_path);
+                                                api_keys_cache = store.list_masked().into_iter()
+                                                    .map(|(n, m)| ApiKeyInfo { name: n, masked_key: m })
+                                                    .collect();
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Copy skill files from preset to skills dir
+                                let preset_dir = app_config.integration_presets_dir().join(&preset_id);
+                                let presets = integrations::list_presets(&app_config.integration_presets_dir());
+                                if let Some((_, manifest)) = presets.iter().find(|(id, _)| id == &preset_id) {
+                                    for skill_file in &manifest.skills {
+                                        let src = preset_dir.join(skill_file);
+                                        let dst = skills_dir.join(skill_file);
+                                        if src.exists() && !dst.exists() {
+                                            let _ = std::fs::copy(&src, &dst);
+                                        }
+                                    }
+                                }
+
+                                // Add to registry
+                                let mut registry = integrations::IntegrationRegistry::load(&app_config.integrations_path());
+                                registry.install(&preset_id);
+                                let _ = registry.save(&app_config.integrations_path());
+
+                                // Rebuild integrations list
+                                integrations_cache = build_integrations_list(&app_config);
+
+                                let msg = format!("Integration '{}' installed.", preset_id);
+                                messages.push(ChatMessageDto { role: "assistant".to_string(), content: msg.clone() });
+                                emit(&BackendEvent::Info { message: msg });
+                            }
+
+                            FrontendCommand::IntegrationUninstall { preset_id } => {
+                                let mut registry = integrations::IntegrationRegistry::load(&app_config.integrations_path());
+                                registry.uninstall(&preset_id);
+                                let _ = registry.save(&app_config.integrations_path());
+
+                                // Rebuild integrations list
+                                integrations_cache = build_integrations_list(&app_config);
+
+                                let msg = format!("Integration '{}' uninstalled.", preset_id);
+                                messages.push(ChatMessageDto { role: "assistant".to_string(), content: msg.clone() });
+                                emit(&BackendEvent::Info { message: msg });
                             }
 
                             FrontendCommand::Shutdown => {
@@ -772,9 +909,10 @@ impl crate::backend::Backend for StarkbotEngine {
             skills_dir: self.app_config.skills_dir().display().to_string(),
             agents_dir: self.app_config.agents_dir().display().to_string(),
             sessions: self.sessions.clone(),
-            scheduled_tasks: self.scheduled_tasks.clone(),
             sessions_dir: self.app_config.sessions_dir().display().to_string(),
-            schedules_dir: self.app_config.schedules_dir().display().to_string(),
+            flows_dir: self.app_config.flows_dir().display().to_string(),
+            inference_configured: !self.api_key.is_empty(),
+            integrations: self.integrations.clone(),
         }
     }
 
@@ -803,13 +941,18 @@ fn handle_slash_command(
         "/quit" | "/exit" => {
             // Frontend handles quit
         }
-        "/clear" => {
+        "/clear" | "/new" => {
             messages.clear();
             tool_activity.clear();
             *agent_state = None;
-            add_msg(messages, "assistant", "Conversation cleared.");
+            let msg = if input.trim() == "/new" {
+                "New chat session started."
+            } else {
+                "Conversation cleared."
+            };
+            add_msg(messages, "assistant", msg);
             let _ = event_tx.send(BackendEvent::Info {
-                message: "Conversation cleared.".to_string(),
+                message: msg.to_string(),
             });
         }
         "/tokens" => {
@@ -824,7 +967,7 @@ fn handle_slash_command(
         }
         cmd if cmd.starts_with("/help") => {
             let msg =
-                "Commands: /quit, /clear, /tokens, /help\nTab: switch views | Ctrl+C: quit"
+                "Commands: /new, /clear, /tokens, /help\nTab: switch views | Ctrl+C: quit"
                     .to_string();
             add_msg(messages, "assistant", &msg);
             let _ = event_tx.send(BackendEvent::Info { message: msg });
@@ -859,6 +1002,35 @@ fn find_bundled_dir(name: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn build_integrations_list(app_config: &AppConfig) -> Vec<IntegrationPresetInfo> {
+    let presets = integrations::list_presets(&app_config.integration_presets_dir());
+    let registry = integrations::IntegrationRegistry::load(&app_config.integrations_path());
+    let key_store = KeyStore::load(&app_config.keys_path()).unwrap_or_default();
+
+    presets
+        .into_iter()
+        .map(|(id, manifest)| {
+            let installed = registry.is_installed(&id);
+            let configured = manifest
+                .requires
+                .api_key
+                .as_ref()
+                .map(|k| key_store.get(k).is_some())
+                .unwrap_or(true);
+            IntegrationPresetInfo {
+                id,
+                name: manifest.name,
+                description: manifest.description,
+                icon: manifest.icon,
+                api_key_name: manifest.requires.api_key,
+                skills: manifest.skills,
+                installed,
+                configured,
+            }
+        })
+        .collect()
 }
 
 fn migrate_keys_from_db(app_config: &AppConfig) {

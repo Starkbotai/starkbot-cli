@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -11,12 +11,25 @@ interface PendingApproval {
   args_display: string;
 }
 
+interface SlashCommandDef {
+  name: string;
+  description: string;
+}
+
+const SLASH_COMMANDS: SlashCommandDef[] = [
+  { name: "new", description: "Start a new chat session" },
+  { name: "clear", description: "Clear chat history" },
+  { name: "tokens", description: "Show token usage" },
+  { name: "help", description: "Show available commands" },
+];
+
 interface ChatBackend {
   messages: ChatMessage[];
   agentBusy: boolean;
   pendingApproval: PendingApproval | null;
   sendMessage: (content: string) => Promise<void>;
   approvalResponse: (requestId: string, approved: boolean) => Promise<void>;
+  slashCommand: (command: string) => Promise<void>;
 }
 
 function MessageBubble({ msg }: { msg: ChatMessage }) {
@@ -105,10 +118,58 @@ function ApprovalPrompt({
   );
 }
 
-export default function ChatView({ backend }: { backend: ChatBackend }) {
+function SlashCommandMenu({
+  commands,
+  selectedIndex,
+  onSelect,
+}: {
+  commands: SlashCommandDef[];
+  selectedIndex: number;
+  onSelect: (cmd: SlashCommandDef) => void;
+}) {
+  return (
+    <div className="absolute bottom-full left-0 right-0 mb-1 bg-surface-2 border border-surface-3 rounded-lg shadow-lg overflow-hidden z-10">
+      {commands.map((cmd, i) => (
+        <button
+          key={cmd.name}
+          onClick={() => onSelect(cmd)}
+          className={`w-full text-left px-4 py-2.5 flex items-center gap-3 transition-colors ${
+            i === selectedIndex ? "bg-accent/20 text-white" : "text-gray-300 hover:bg-surface-3"
+          }`}
+        >
+          <span className="text-sm font-mono text-accent-light">/{cmd.name}</span>
+          <span className="text-xs text-gray-500">{cmd.description}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export default function ChatView({
+  backend,
+  inferenceConfigured = true,
+  onNavigateSettings,
+}: {
+  backend: ChatBackend;
+  inferenceConfigured?: boolean;
+  onNavigateSettings?: () => void;
+}) {
   const [input, setInput] = useState("");
+  const [selectedCmd, setSelectedCmd] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Show menu when input starts with /
+  const showMenu = input.startsWith("/") && !backend.agentBusy;
+  const query = input.slice(1).toLowerCase();
+  const filteredCommands = useMemo(
+    () => (showMenu ? SLASH_COMMANDS.filter((c) => c.name.startsWith(query)) : []),
+    [showMenu, query],
+  );
+
+  useEffect(() => {
+    setSelectedCmd(0);
+  }, [input]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -120,12 +181,52 @@ export default function ChatView({ backend }: { backend: ChatBackend }) {
     }
   }, [backend.agentBusy, backend.pendingApproval]);
 
+  const runSlashCommand = (name: string) => {
+    setInput("");
+    backend.slashCommand(`/${name}`);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const msg = input.trim();
     if (!msg || backend.agentBusy) return;
+
+    // Slash command
+    if (msg.startsWith("/")) {
+      const cmdName = msg.slice(1).split(/\s/)[0].toLowerCase();
+      const found = SLASH_COMMANDS.find((c) => c.name === cmdName);
+      if (found) {
+        runSlashCommand(found.name);
+        return;
+      }
+      // Still send to backend for unknown commands (it will show an error)
+      setInput("");
+      await backend.slashCommand(msg);
+      return;
+    }
+
     setInput("");
     await backend.sendMessage(msg);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (!showMenu || filteredCommands.length === 0) return;
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setSelectedCmd((prev) => (prev + 1) % filteredCommands.length);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setSelectedCmd((prev) => (prev - 1 + filteredCommands.length) % filteredCommands.length);
+    } else if (e.key === "Tab") {
+      e.preventDefault();
+      // Tab autocompletes the command name
+      setInput(`/${filteredCommands[selectedCmd].name}`);
+    } else if (e.key === "Enter" && showMenu && filteredCommands.length > 0 && input !== `/${filteredCommands[selectedCmd].name}`) {
+      // If the menu is visible and it's not an exact match yet, select the highlighted command
+      e.preventDefault();
+      runSlashCommand(filteredCommands[selectedCmd].name);
+    }
   };
 
   return (
@@ -148,27 +249,58 @@ export default function ChatView({ backend }: { backend: ChatBackend }) {
         />
       )}
 
-      {/* Input */}
-      <form onSubmit={handleSubmit} className="px-4 py-3 border-t border-surface-3">
-        <div className="flex gap-2">
-          <input
-            ref={inputRef}
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder={backend.agentBusy ? "Agent is thinking..." : "Type a message..."}
-            disabled={backend.agentBusy}
-            className="flex-1 px-4 py-2 bg-surface-2 border border-surface-3 rounded-lg text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-accent/50 disabled:opacity-50"
-          />
-          <button
-            type="submit"
-            disabled={backend.agentBusy || !input.trim()}
-            className="px-4 py-2 bg-accent hover:bg-accent-dim text-white text-sm rounded-lg transition-colors disabled:opacity-30"
-          >
-            Send
-          </button>
+      {/* Input or setup banner */}
+      {!inferenceConfigured ? (
+        <div className="px-4 py-4 border-t border-surface-3">
+          <div className="flex items-center gap-3 p-4 rounded-lg bg-yellow-900/20 border border-yellow-700/30">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-yellow-400 flex-shrink-0">
+              <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            <div className="flex-1">
+              <div className="text-sm font-semibold text-yellow-400">Inference not configured</div>
+              <div className="text-xs text-gray-400 mt-0.5">Add your OpenAI API key to start chatting</div>
+            </div>
+            {onNavigateSettings && (
+              <button
+                onClick={onNavigateSettings}
+                className="px-4 py-1.5 bg-accent hover:bg-accent-dim text-white text-sm rounded transition-colors"
+              >
+                Configure Inference
+              </button>
+            )}
+          </div>
         </div>
-      </form>
+      ) : (
+        <form onSubmit={handleSubmit} className="px-4 py-3 border-t border-surface-3 relative">
+          {/* Slash command autocomplete */}
+          {showMenu && filteredCommands.length > 0 && (
+            <SlashCommandMenu
+              commands={filteredCommands}
+              selectedIndex={selectedCmd}
+              onSelect={(cmd) => runSlashCommand(cmd.name)}
+            />
+          )}
+          <div className="flex gap-2">
+            <input
+              ref={inputRef}
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={backend.agentBusy ? "Agent is thinking..." : "Type a message... (/ for commands)"}
+              disabled={backend.agentBusy}
+              className="flex-1 px-4 py-2 bg-surface-2 border border-surface-3 rounded-lg text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-accent/50 disabled:opacity-50"
+            />
+            <button
+              type="submit"
+              disabled={backend.agentBusy || !input.trim()}
+              className="px-4 py-2 bg-accent hover:bg-accent-dim text-white text-sm rounded-lg transition-colors disabled:opacity-30"
+            >
+              Send
+            </button>
+          </div>
+        </form>
+      )}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import type { AppSnapshot, BackendEvent, ChatMessage, ChatSession, SessionSummary, ScheduledTaskSummary, Schedule, FlowDefinition } from "../types";
+import type { AppSnapshot, BackendEvent, ChatMessage, ChatSession, SessionSummary, SavedFlow, FlowSummary, FlowLogEntry } from "../types";
 
 interface PendingApproval {
   request_id: string;
@@ -27,7 +27,10 @@ interface BackendState {
   debugLogs: DebugLogEntry[];
   viewingSession: ChatSession | null;
   sessions: SessionSummary[];
-  scheduledTasks: ScheduledTaskSummary[];
+  flows: FlowSummary[];
+  flowLogs: FlowLogEntry[];
+  editingFlow: SavedFlow | null;
+  inferenceConfigured: boolean;
 }
 
 export function useBackend() {
@@ -43,7 +46,10 @@ export function useBackend() {
     debugLogs: [],
     viewingSession: null,
     sessions: [],
-    scheduledTasks: [],
+    flows: [],
+    flowLogs: [],
+    editingFlow: null,
+    inferenceConfigured: false,
   });
 
   const messagesRef = useRef(state.messages);
@@ -61,7 +67,7 @@ export function useBackend() {
         toolActivity: snapshot.tool_activity,
         agentBusy: snapshot.agent_busy,
         sessions: snapshot.sessions ?? [],
-        scheduledTasks: snapshot.scheduled_tasks ?? [],
+        inferenceConfigured: snapshot.inference_configured ?? false,
         snapshot,
       }));
     };
@@ -81,7 +87,6 @@ export function useBackend() {
   useEffect(() => {
     const unlisten = listen<BackendEvent>("backend-event", (event) => {
       try {
-        // Tauri 2 deserializes the payload for us (Rust Serialize -> JS object)
         const evt: BackendEvent = typeof event.payload === "string"
           ? JSON.parse(event.payload)
           : event.payload;
@@ -121,7 +126,6 @@ export function useBackend() {
       }
       if ("ThinkingText" in evt) {
         const { content } = evt.ThinkingText;
-        // Append or update last thinking message
         const lastMsg = prev.messages[prev.messages.length - 1];
         if (lastMsg && lastMsg.role === "thinking") {
           const updatedMessages = [...prev.messages];
@@ -182,8 +186,29 @@ export function useBackend() {
       if ("SessionsUpdated" in evt) {
         return { ...prev, sessions: evt.SessionsUpdated };
       }
-      if ("SchedulesUpdated" in evt) {
-        return { ...prev, scheduledTasks: evt.SchedulesUpdated };
+      if ("FlowLoaded" in evt) {
+        return { ...prev, editingFlow: evt.FlowLoaded };
+      }
+      if ("FlowsListed" in evt) {
+        return { ...prev, flows: evt.FlowsListed };
+      }
+      if ("FlowLogsLoaded" in evt) {
+        return { ...prev, flowLogs: evt.FlowLogsLoaded };
+      }
+      if ("Snapshot" in evt) {
+        const snapshot = evt.Snapshot;
+        return {
+          ...prev,
+          messages: snapshot.messages,
+          personaName: snapshot.persona_name,
+          modelName: snapshot.model_name,
+          status: snapshot.status,
+          toolActivity: snapshot.tool_activity,
+          agentBusy: snapshot.agent_busy,
+          sessions: snapshot.sessions ?? [],
+          inferenceConfigured: snapshot.inference_configured ?? false,
+          snapshot,
+        };
       }
       return prev;
     });
@@ -211,10 +236,29 @@ export function useBackend() {
 
   const addApiKey = useCallback(async (name: string, key: string) => {
     await invoke("api_key_add", { name, key });
+    const masked_key = key.length > 8
+      ? key.slice(0, 3) + "..." + key.slice(-4)
+      : "***";
+    setState((prev) => {
+      const existingKeys = prev.snapshot?.api_keys ?? [];
+      const updatedKeys = existingKeys.filter((k) => k.name !== name);
+      updatedKeys.push({ name, masked_key });
+      const updatedSnapshot = prev.snapshot
+        ? { ...prev.snapshot, api_keys: updatedKeys, inference_configured: name === "OPENAI_API_KEY" ? true : prev.snapshot.inference_configured }
+        : prev.snapshot;
+      return {
+        ...prev,
+        inferenceConfigured: name === "OPENAI_API_KEY" ? true : prev.inferenceConfigured,
+        snapshot: updatedSnapshot,
+      };
+    });
   }, []);
 
   const deleteApiKey = useCallback(async (name: string) => {
     await invoke("api_key_delete", { name });
+    if (name === "OPENAI_API_KEY") {
+      setState((prev) => ({ ...prev, inferenceConfigured: false }));
+    }
   }, []);
 
   const loadSession = useCallback(async (sessionId: string) => {
@@ -226,16 +270,52 @@ export function useBackend() {
     await invoke("delete_session", { sessionId });
   }, []);
 
-  const createSchedule = useCallback(async (name: string, schedule: Schedule, flow: FlowDefinition) => {
-    await invoke("schedule_create", { name, schedule, flow });
+  const saveFlow = useCallback(async (flow: SavedFlow) => {
+    await invoke("flow_save", { flow });
   }, []);
 
-  const deleteSchedule = useCallback(async (taskId: string) => {
-    await invoke("schedule_delete", { taskId });
+  const loadFlow = useCallback(async (flowId: string) => {
+    await invoke("flow_load", { flowId });
   }, []);
 
-  const toggleSchedule = useCallback(async (taskId: string) => {
-    await invoke("schedule_toggle", { taskId });
+  const deleteFlow = useCallback(async (flowId: string) => {
+    await invoke("flow_delete", { flowId });
+  }, []);
+
+  const listFlows = useCallback(async () => {
+    await invoke("flow_list");
+  }, []);
+
+  const toggleFlowEnabled = useCallback(async (flowId: string) => {
+    await invoke("flow_toggle_enabled", { flowId });
+  }, []);
+
+  const loadFlowLogs = useCallback(async () => {
+    await invoke("flow_logs_load");
+  }, []);
+
+  const slashCommand = useCallback(async (command: string) => {
+    // Optimistically clear local state for /clear and /new
+    if (command === "/clear" || command === "/new") {
+      setState((prev) => ({ ...prev, messages: [], toolActivity: [] }));
+    }
+    await invoke("slash_command", { command });
+  }, []);
+
+  const clearMessages = useCallback(() => {
+    setState((prev) => ({ ...prev, messages: [], toolActivity: [] }));
+  }, []);
+
+  const clearEditingFlow = useCallback(() => {
+    setState((prev) => ({ ...prev, editingFlow: null }));
+  }, []);
+
+  const installIntegration = useCallback(async (presetId: string, apiKey?: string) => {
+    await invoke("integration_install", { presetId, apiKey: apiKey ?? null });
+  }, []);
+
+  const uninstallIntegration = useCallback(async (presetId: string) => {
+    await invoke("integration_uninstall", { presetId });
   }, []);
 
   return {
@@ -247,8 +327,16 @@ export function useBackend() {
     deleteApiKey,
     loadSession,
     deleteSession,
-    createSchedule,
-    deleteSchedule,
-    toggleSchedule,
+    saveFlow,
+    loadFlow,
+    deleteFlow,
+    listFlows,
+    toggleFlowEnabled,
+    loadFlowLogs,
+    slashCommand,
+    clearMessages,
+    clearEditingFlow,
+    installIntegration,
+    uninstallIntegration,
   };
 }

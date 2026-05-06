@@ -1,108 +1,124 @@
-import { useState } from "react";
-import type { ScheduledTaskSummary, Schedule, FlowDefinition } from "../types";
+import { useState, useEffect } from "react";
+import type { SavedFlow, FlowSummary } from "../types";
+import FlowEditor from "./flow/FlowEditor";
 
 interface Props {
-  tasks: ScheduledTaskSummary[];
-  onCreate: (name: string, schedule: Schedule, flow: FlowDefinition) => void;
-  onDelete: (taskId: string) => void;
-  onToggle: (taskId: string) => void;
+  flows: FlowSummary[];
+  editingFlow: SavedFlow | null;
+  onSaveFlow: (flow: SavedFlow) => void;
+  onLoadFlow: (flowId: string) => void;
+  onDeleteFlow: (flowId: string) => void;
+  onToggleFlowEnabled: (flowId: string) => void;
+  onListFlows: () => void;
+  onClearEditingFlow: () => void;
 }
 
-function formatSchedule(s: Schedule): string {
-  if (s.type === "every_minutes") return `every ${s.value}m`;
-  if (s.type === "every_hours") return `every ${s.value}h`;
-  return "unknown";
-}
-
-export default function SchedulingView({ tasks, onCreate, onDelete, onToggle }: Props) {
+export default function FlowsView({
+  flows,
+  editingFlow,
+  onSaveFlow,
+  onLoadFlow,
+  onDeleteFlow,
+  onToggleFlowEnabled,
+  onListFlows,
+  onClearEditingFlow,
+}: Props) {
   const [selectedIdx, setSelectedIdx] = useState(0);
-  const [showCreate, setShowCreate] = useState(false);
-  const [newName, setNewName] = useState("");
-  const [schedType, setSchedType] = useState<"every_minutes" | "every_hours">("every_minutes");
-  const [schedValue, setSchedValue] = useState("5");
+  const [showFlowEditor, setShowFlowEditor] = useState(false);
 
-  const handleCreate = () => {
-    if (!newName.trim()) return;
-    const schedule: Schedule = { type: schedType, value: parseInt(schedValue) || 5 };
-    const flow: FlowDefinition = { nodes: [], edges: [] };
-    onCreate(newName.trim(), schedule, flow);
-    setNewName("");
-    setSchedValue("5");
-    setShowCreate(false);
+  // Load flows list on mount
+  useEffect(() => {
+    onListFlows();
+  }, []);
+
+  const selected = selectedIdx < flows.length ? flows[selectedIdx] : null;
+
+  const handleNewFlow = () => {
+    const now = new Date().toISOString();
+    const id = crypto.randomUUID();
+    const newFlow: SavedFlow = {
+      id,
+      name: "New Flow",
+      flow: { nodes: [], edges: [] },
+      created_at: now,
+      updated_at: now,
+      enabled: false,
+    };
+    onSaveFlow(newFlow);
+    onLoadFlow(id);
+    setShowFlowEditor(true);
   };
 
-  const selected = selectedIdx < tasks.length ? tasks[selectedIdx] : null;
+  const handleEditFlow = () => {
+    if (!selected) return;
+    onLoadFlow(selected.id);
+    setShowFlowEditor(true);
+  };
+
+  const handleFlowSave = (flow: SavedFlow) => {
+    onSaveFlow(flow);
+  };
+
+  const handleFlowClose = () => {
+    setShowFlowEditor(false);
+    onClearEditingFlow();
+    onListFlows();
+  };
+
+  // Show flow editor overlay
+  if (showFlowEditor && editingFlow) {
+    return (
+      <FlowEditor
+        flow={editingFlow}
+        onSave={handleFlowSave}
+        onClose={handleFlowClose}
+      />
+    );
+  }
 
   return (
     <div className="flex h-full">
-      {/* Task list */}
+      {/* Flow list */}
       <div className="w-[40%] border-r border-surface-3 flex flex-col">
         <div className="flex items-center justify-between p-2 border-b border-surface-3">
-          <span className="text-xs text-gray-500">{tasks.length} task{tasks.length !== 1 ? "s" : ""}</span>
+          <span className="text-xs text-gray-500">{flows.length} flow{flows.length !== 1 ? "s" : ""}</span>
           <button
-            onClick={() => setShowCreate(!showCreate)}
+            onClick={handleNewFlow}
             className="px-2 py-0.5 text-xs rounded bg-accent/20 text-accent hover:bg-accent/30"
           >
             + New
           </button>
         </div>
 
-        {showCreate && (
-          <div className="p-3 border-b border-surface-3 bg-surface-1 space-y-2">
-            <input
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              placeholder="Task name"
-              className="w-full px-2 py-1 text-sm rounded bg-surface-0 border border-surface-3 text-gray-200 focus:border-accent outline-none"
-            />
-            <div className="flex gap-2">
-              <select
-                value={schedType}
-                onChange={(e) => setSchedType(e.target.value as "every_minutes" | "every_hours")}
-                className="flex-1 px-2 py-1 text-sm rounded bg-surface-0 border border-surface-3 text-gray-200"
-              >
-                <option value="every_minutes">Minutes</option>
-                <option value="every_hours">Hours</option>
-              </select>
-              <input
-                value={schedValue}
-                onChange={(e) => setSchedValue(e.target.value)}
-                type="number"
-                min="1"
-                className="w-20 px-2 py-1 text-sm rounded bg-surface-0 border border-surface-3 text-gray-200"
-              />
-            </div>
-            <button
-              onClick={handleCreate}
-              className="w-full px-2 py-1 text-sm rounded bg-accent text-white hover:bg-accent/80"
-            >
-              Create
-            </button>
-          </div>
-        )}
-
         <div className="flex-1 overflow-y-auto">
-          {tasks.length === 0 ? (
+          {flows.length === 0 ? (
             <div className="p-4 text-sm text-gray-500">
-              No scheduled tasks. Click "+ New" to create one.
+              No flows yet. Click "+ New" to create one.
             </div>
           ) : (
-            tasks.map((t, i) => (
+            flows.map((f, i) => (
               <div
-                key={t.id}
+                key={f.id}
                 onClick={() => setSelectedIdx(i)}
+                onDoubleClick={() => {
+                  setSelectedIdx(i);
+                  onLoadFlow(f.id);
+                  setShowFlowEditor(true);
+                }}
                 className={`px-3 py-2 cursor-pointer border-b border-surface-2 hover:bg-surface-2 transition-colors ${
                   i === selectedIdx ? "bg-surface-2 border-l-2 border-l-accent" : ""
                 }`}
               >
                 <div className="flex items-center gap-2">
-                  <span className="text-sm text-gray-200">{t.name}</span>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${t.enabled ? "bg-green-900/40 text-green-400" : "bg-red-900/40 text-red-400"}`}>
-                    {t.enabled ? "ON" : "OFF"}
-                  </span>
+                  <span className="text-sm text-gray-200">{f.name}</span>
+                  {f.enabled ? (
+                    <span className="px-1 py-0.5 text-[9px] rounded bg-green-900/40 text-green-400 border border-green-800/50">ON</span>
+                  ) : (
+                    <span className="px-1 py-0.5 text-[9px] rounded bg-gray-800 text-gray-500 border border-gray-700">OFF</span>
+                  )}
                 </div>
                 <div className="text-xs text-gray-500 mt-0.5">
-                  {formatSchedule(t.schedule)} | {t.node_count} nodes
+                  {f.node_count} nodes | {f.updated_at.slice(0, 10)}
                 </div>
               </div>
             ))
@@ -116,34 +132,43 @@ export default function SchedulingView({ tasks, onCreate, onDelete, onToggle }: 
           <div>
             <h2 className="text-lg font-semibold text-gray-200 mb-1">{selected.name}</h2>
             <div className="flex items-center gap-3 text-sm mb-4">
-              <span className="text-yellow-400">{formatSchedule(selected.schedule)}</span>
-              <span className={selected.enabled ? "text-green-400" : "text-red-400"}>
-                {selected.enabled ? "Enabled" : "Disabled"}
-              </span>
               <span className="text-gray-500">{selected.node_count} nodes</span>
-              <span className="text-gray-500">{selected.created_at.slice(0, 10)}</span>
+              <span className="text-gray-500">Created {selected.created_at.slice(0, 10)}</span>
+              <span className="text-gray-500">Updated {selected.updated_at.slice(0, 10)}</span>
             </div>
             <div className="flex gap-2 mb-4">
               <button
-                onClick={() => onToggle(selected.id)}
-                className="px-3 py-1 text-sm rounded bg-surface-2 text-gray-300 hover:bg-surface-3"
+                onClick={handleEditFlow}
+                className="px-3 py-1 text-sm rounded bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30"
               >
-                {selected.enabled ? "Disable" : "Enable"}
+                Edit Flow
               </button>
               <button
-                onClick={() => onDelete(selected.id)}
+                onClick={() => onToggleFlowEnabled(selected.id)}
+                className={`px-3 py-1 text-sm rounded ${
+                  selected.enabled
+                    ? "bg-green-900/30 text-green-400 hover:bg-green-900/50"
+                    : "bg-gray-800 text-gray-400 hover:bg-gray-700"
+                }`}
+              >
+                {selected.enabled ? "Enabled" : "Disabled"}
+              </button>
+              <button
+                onClick={() => {
+                  onDeleteFlow(selected.id);
+                  setSelectedIdx(0);
+                }}
                 className="px-3 py-1 text-sm rounded bg-red-900/30 text-red-400 hover:bg-red-900/50"
               >
                 Delete
               </button>
             </div>
             <div className="text-xs text-gray-500">
-              <p>Flow nodes and edges will appear here once the task has a flow defined.</p>
-              <p className="mt-1">Node count: {selected.node_count}</p>
+              Double-click a flow in the list to open the editor.
             </div>
           </div>
         ) : (
-          <div className="text-sm text-gray-500">Select a task to view details.</div>
+          <div className="text-sm text-gray-500">Select a flow to view details, or create a new one.</div>
         )}
       </div>
     </div>

@@ -4,6 +4,7 @@ import type { AppSnapshot } from "../types";
 export default function SkillsView({ snapshot }: { snapshot: AppSnapshot | null }) {
   const [selected, setSelected] = useState(0);
   const skills = snapshot?.skills || [];
+  const skillsDir = snapshot?.skills_dir || "";
 
   if (!skills.length) {
     return (

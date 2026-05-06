@@ -18,8 +18,10 @@ pub struct FlowNode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FlowNodeType {
+    Entry,
     Prompt,
     Branch,
+    BranchTool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,78 +42,106 @@ pub struct FlowDefinition {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", content = "value")]
-pub enum Schedule {
-    #[serde(rename = "every_minutes")]
-    EveryMinutes(u32),
-    #[serde(rename = "every_hours")]
-    EveryHours(u32),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScheduledTask {
+pub struct SavedFlow {
     pub id: String,
     pub name: String,
-    pub schedule: Schedule,
     pub flow: FlowDefinition,
     pub created_at: String,
+    pub updated_at: String,
+    #[serde(default)]
     pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ScheduledTaskSummary {
+pub struct FlowSummary {
     pub id: String,
     pub name: String,
-    pub schedule: Schedule,
     pub node_count: usize,
-    pub enabled: bool,
     pub created_at: String,
+    pub updated_at: String,
+    #[serde(default)]
+    pub enabled: bool,
 }
 
-pub fn save_schedule(dir: &Path, task: &ScheduledTask) -> Result<(), String> {
+// --- Flow CRUD ---
+
+pub fn save_flow(dir: &Path, flow: &SavedFlow) -> Result<(), String> {
     std::fs::create_dir_all(dir)
-        .map_err(|e| format!("Failed to create schedules dir: {}", e))?;
-    let path = dir.join(format!("{}.json", task.id));
-    let json = serde_json::to_string_pretty(task)
-        .map_err(|e| format!("Failed to serialize schedule: {}", e))?;
+        .map_err(|e| format!("Failed to create flows dir: {}", e))?;
+    let path = dir.join(format!("{}.json", flow.id));
+    let json = serde_json::to_string_pretty(flow)
+        .map_err(|e| format!("Failed to serialize flow: {}", e))?;
     std::fs::write(&path, json)
-        .map_err(|e| format!("Failed to write schedule {}: {}", path.display(), e))
+        .map_err(|e| format!("Failed to write flow {}: {}", path.display(), e))
 }
 
-pub fn list_schedules(dir: &Path) -> Vec<ScheduledTaskSummary> {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return vec![],
-    };
-    let mut summaries: Vec<ScheduledTaskSummary> = entries
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map(|x| x == "json").unwrap_or(false))
-        .filter_map(|e| {
-            let data = std::fs::read_to_string(e.path()).ok()?;
-            let task: ScheduledTask = serde_json::from_str(&data).ok()?;
-            Some(ScheduledTaskSummary {
-                id: task.id,
-                name: task.name,
-                schedule: task.schedule,
-                node_count: task.flow.nodes.len(),
-                enabled: task.enabled,
-                created_at: task.created_at,
-            })
-        })
-        .collect();
-    summaries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-    summaries
-}
-
-pub fn load_schedule(dir: &Path, id: &str) -> Option<ScheduledTask> {
+pub fn load_flow(dir: &Path, id: &str) -> Option<SavedFlow> {
     if !is_safe_id(id) { return None; }
     let path = dir.join(format!("{}.json", id));
     let data = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&data).ok()
 }
 
-pub fn delete_schedule(dir: &Path, id: &str) -> bool {
+pub fn list_flows(dir: &Path) -> Vec<FlowSummary> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return vec![],
+    };
+    let mut summaries: Vec<FlowSummary> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map(|x| x == "json").unwrap_or(false))
+        .filter_map(|e| {
+            let data = std::fs::read_to_string(e.path()).ok()?;
+            let flow: SavedFlow = serde_json::from_str(&data).ok()?;
+            Some(FlowSummary {
+                id: flow.id,
+                name: flow.name,
+                node_count: flow.flow.nodes.len(),
+                created_at: flow.created_at,
+                updated_at: flow.updated_at,
+                enabled: flow.enabled,
+            })
+        })
+        .collect();
+    summaries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    summaries
+}
+
+pub fn delete_flow(dir: &Path, id: &str) -> bool {
     if !is_safe_id(id) { return false; }
     let path = dir.join(format!("{}.json", id));
     std::fs::remove_file(path).is_ok()
+}
+
+// --- Flow Logs ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlowLogEntry {
+    pub timestamp: String,
+    pub flow_id: String,
+    pub flow_name: String,
+    pub action: String,
+    pub detail: String,
+}
+
+pub fn append_flow_log(log_path: &Path, entry: &FlowLogEntry) {
+    let mut entries = load_flow_logs(log_path);
+    entries.push(entry.clone());
+    // Keep last 500 entries
+    if entries.len() > 500 {
+        entries = entries.split_off(entries.len() - 500);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(&entries) {
+        let _ = std::fs::write(log_path, json);
+    }
+}
+
+pub fn load_flow_logs(log_path: &Path) -> Vec<FlowLogEntry> {
+    if !log_path.exists() {
+        return vec![];
+    }
+    std::fs::read_to_string(log_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
 }

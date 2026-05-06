@@ -3,6 +3,7 @@ pub mod settings;
 pub mod manifest;
 pub mod sessions;
 pub mod schedules;
+pub mod integrations;
 
 use std::path::{Path, PathBuf};
 
@@ -64,17 +65,30 @@ impl AppConfig {
         self.root.join("sessions")
     }
 
-    pub fn schedules_dir(&self) -> PathBuf {
-        self.root.join("schedules")
+    pub fn flows_dir(&self) -> PathBuf {
+        self.root.join("flows")
+    }
+
+    pub fn integration_presets_dir(&self) -> PathBuf {
+        self.root.join("integration_presets")
+    }
+
+    pub fn integrations_path(&self) -> PathBuf {
+        self.root.join("integrations.json")
+    }
+
+    pub fn flow_logs_path(&self) -> PathBuf {
+        self.root.join("flow_logs.json")
     }
 
     /// Ensure all directories exist and seed defaults on first run.
-    /// `bundled_agents` and `bundled_skills` are source directories to copy from
-    /// (typically CWD-relative or exe-adjacent).
+    /// `bundled_agents`, `bundled_skills`, and `bundled_integration_presets`
+    /// are source directories to copy from (typically CWD-relative or exe-adjacent).
     pub fn ensure_initialized(
         &self,
         bundled_agents: Option<&Path>,
         bundled_skills: Option<&Path>,
+        bundled_integration_presets: Option<&Path>,
     ) -> Result<(), String> {
         // Create directory structure
         let dirs = [
@@ -83,7 +97,8 @@ impl AppConfig {
             &self.skills_dir(),
             &self.memories_dir(),
             &self.sessions_dir(),
-            &self.schedules_dir(),
+            &self.flows_dir(),
+            &self.integration_presets_dir(),
         ];
         for dir in &dirs {
             std::fs::create_dir_all(dir)
@@ -120,6 +135,19 @@ impl AppConfig {
             if src.is_dir() {
                 seed_dir(src, &self.skills_dir())?;
             }
+        }
+
+        // Seed bundled integration presets
+        if let Some(src) = bundled_integration_presets {
+            if src.is_dir() {
+                seed_dir(src, &self.integration_presets_dir())?;
+            }
+        }
+
+        // Seed integrations.json if missing
+        if !self.integrations_path().exists() {
+            let registry = integrations::IntegrationRegistry::default();
+            registry.save(&self.integrations_path())?;
         }
 
         Ok(())
@@ -171,7 +199,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("starkbot-config-test");
         let _ = std::fs::remove_dir_all(&tmp);
         let cfg = AppConfig::open_at(&tmp);
-        cfg.ensure_initialized(None, None).unwrap();
+        cfg.ensure_initialized(None, None, None).unwrap();
 
         assert!(cfg.manifest_path().exists());
         assert!(cfg.settings_path().exists());
@@ -180,9 +208,11 @@ mod tests {
         assert!(cfg.skills_dir().is_dir());
         assert!(cfg.memories_dir().is_dir());
         assert!(cfg.sessions_dir().is_dir());
+        assert!(cfg.integration_presets_dir().is_dir());
+        assert!(cfg.integrations_path().exists());
 
         // Second call should not fail (idempotent)
-        cfg.ensure_initialized(None, None).unwrap();
+        cfg.ensure_initialized(None, None, None).unwrap();
 
         let _ = std::fs::remove_dir_all(&tmp);
     }

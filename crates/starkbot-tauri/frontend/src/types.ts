@@ -68,7 +68,7 @@ export interface SessionSummary {
 
 export interface FlowNode {
   id: string;
-  node_type: "prompt" | "branch";
+  node_type: "entry" | "prompt" | "branch" | "branch_tool";
   data: Record<string, unknown>;
   position: [number, number];
 }
@@ -86,26 +86,41 @@ export interface FlowDefinition {
   edges: FlowEdge[];
 }
 
-export type Schedule =
-  | { type: "every_minutes"; value: number }
-  | { type: "every_hours"; value: number };
-
-export interface ScheduledTask {
+export interface SavedFlow {
   id: string;
   name: string;
-  schedule: Schedule;
   flow: FlowDefinition;
   created_at: string;
+  updated_at: string;
   enabled: boolean;
 }
 
-export interface ScheduledTaskSummary {
+export interface FlowSummary {
   id: string;
   name: string;
-  schedule: Schedule;
   node_count: number;
-  enabled: boolean;
   created_at: string;
+  updated_at: string;
+  enabled: boolean;
+}
+
+export interface FlowLogEntry {
+  timestamp: string;
+  flow_id: string;
+  flow_name: string;
+  action: string;
+  detail: string;
+}
+
+export interface IntegrationPresetInfo {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  api_key_name: string | null;
+  skills: string[];
+  installed: boolean;
+  configured: boolean;
 }
 
 export interface AppSnapshot {
@@ -124,9 +139,10 @@ export interface AppSnapshot {
   skills_dir: string;
   agents_dir: string;
   sessions: SessionSummary[];
-  scheduled_tasks: ScheduledTaskSummary[];
   sessions_dir: string;
-  schedules_dir: string;
+  flows_dir: string;
+  inference_configured: boolean;
+  integrations: IntegrationPresetInfo[];
 }
 
 // BackendEvent variants (comes as JSON string from Tauri)
@@ -144,4 +160,6 @@ export type BackendEvent =
   | { DebugLog: { timestamp: string; level: string; message: string } }
   | { SessionLoaded: ChatSession }
   | { SessionsUpdated: SessionSummary[] }
-  | { SchedulesUpdated: ScheduledTaskSummary[] };
+  | { FlowLoaded: SavedFlow }
+  | { FlowsListed: FlowSummary[] }
+  | { FlowLogsLoaded: FlowLogEntry[] };

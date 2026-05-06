@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Tabs, Wrap};
 
 use starkbot_api::events::{BackendEvent, FrontendCommand};
-use starkbot_api::types::{AppSnapshot, SessionSummary, ScheduledTaskSummary, ChatSession, ScheduledTask};
+use starkbot_api::types::{AppSnapshot, SessionSummary, ChatSession, FlowSummary};
 use starkbot_core::persona::Persona;
 use starkbot_graph::{GraphData, GraphWidget, Viewport};
 use starkbot_skills::Skill;
@@ -120,7 +120,7 @@ pub enum DataFocus {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-pub enum ScheduleFocus {
+pub enum FlowsFocus {
     List,
     Detail,
 }
@@ -169,11 +169,10 @@ pub struct TuiState {
     pub selected_session: usize,
     pub viewing_session: Option<ChatSession>,
     pub data_focus: DataFocus,
-    // Scheduling state
-    pub scheduled_tasks: Vec<ScheduledTaskSummary>,
-    pub selected_schedule: usize,
-    pub viewing_schedule: Option<ScheduledTask>,
-    pub schedule_focus: ScheduleFocus,
+    // Flows state
+    pub flows: Vec<FlowSummary>,
+    pub selected_flow: usize,
+    pub flows_focus: FlowsFocus,
 }
 
 impl TuiState {
@@ -221,10 +220,9 @@ impl TuiState {
             selected_session: 0,
             viewing_session: None,
             data_focus: DataFocus::SessionList,
-            scheduled_tasks: vec![],
-            selected_schedule: 0,
-            viewing_schedule: None,
-            schedule_focus: ScheduleFocus::List,
+            flows: vec![],
+            selected_flow: 0,
+            flows_focus: FlowsFocus::List,
         }
     }
 
@@ -317,10 +315,9 @@ impl TuiState {
             selected_session: 0,
             viewing_session: None,
             data_focus: DataFocus::SessionList,
-            scheduled_tasks: snapshot.scheduled_tasks.clone(),
-            selected_schedule: 0,
-            viewing_schedule: None,
-            schedule_focus: ScheduleFocus::List,
+            flows: vec![],
+            selected_flow: 0,
+            flows_focus: FlowsFocus::List,
         }
     }
 
@@ -389,13 +386,16 @@ impl TuiState {
                     self.selected_session = self.sessions.len() - 1;
                 }
             }
-            BackendEvent::SchedulesUpdated(tasks) => {
-                self.scheduled_tasks = tasks.clone();
-                if self.scheduled_tasks.is_empty() {
-                    self.selected_schedule = 0;
-                } else if self.selected_schedule >= self.scheduled_tasks.len() {
-                    self.selected_schedule = self.scheduled_tasks.len() - 1;
+            BackendEvent::FlowsListed(flows) => {
+                self.flows = flows.clone();
+                if self.flows.is_empty() {
+                    self.selected_flow = 0;
+                } else if self.selected_flow >= self.flows.len() {
+                    self.selected_flow = self.flows.len() - 1;
                 }
+            }
+            BackendEvent::FlowLoaded(_) => {
+                // TUI doesn't open the flow editor (GUI only)
             }
         }
     }
@@ -702,32 +702,25 @@ fn handle_scheduling_key(state: &mut TuiState, key: KeyEvent) -> Option<Frontend
     match key.code {
         KeyCode::Tab => { state.active_view = state.active_view.next(); }
         KeyCode::Char('h') | KeyCode::Left => {
-            state.schedule_focus = ScheduleFocus::List;
+            state.flows_focus = FlowsFocus::List;
         }
         KeyCode::Char('l') | KeyCode::Right => {
-            state.schedule_focus = ScheduleFocus::Detail;
+            state.flows_focus = FlowsFocus::Detail;
         }
         KeyCode::Up | KeyCode::Char('k') => {
-            if state.schedule_focus == ScheduleFocus::List {
-                state.selected_schedule = state.selected_schedule.saturating_sub(1);
+            if state.flows_focus == FlowsFocus::List {
+                state.selected_flow = state.selected_flow.saturating_sub(1);
             }
         }
         KeyCode::Down | KeyCode::Char('j') => {
-            if state.schedule_focus == ScheduleFocus::List && !state.scheduled_tasks.is_empty() {
-                state.selected_schedule = (state.selected_schedule + 1).min(state.scheduled_tasks.len() - 1);
+            if state.flows_focus == FlowsFocus::List && !state.flows.is_empty() {
+                state.selected_flow = (state.selected_flow + 1).min(state.flows.len() - 1);
             }
         }
         KeyCode::Char('d') => {
-            if state.schedule_focus == ScheduleFocus::List && state.selected_schedule < state.scheduled_tasks.len() {
-                let id = state.scheduled_tasks[state.selected_schedule].id.clone();
-                state.viewing_schedule = None;
-                return Some(FrontendCommand::ScheduleDelete { task_id: id });
-            }
-        }
-        KeyCode::Char('e') => {
-            if state.schedule_focus == ScheduleFocus::List && state.selected_schedule < state.scheduled_tasks.len() {
-                let id = state.scheduled_tasks[state.selected_schedule].id.clone();
-                return Some(FrontendCommand::ScheduleToggle { task_id: id });
+            if state.flows_focus == FlowsFocus::List && state.selected_flow < state.flows.len() {
+                let id = state.flows[state.selected_flow].id.clone();
+                return Some(FrontendCommand::FlowDelete { flow_id: id });
             }
         }
         _ => {}
@@ -1195,12 +1188,6 @@ fn draw_memory(frame: &mut ratatui::Frame, _state: &TuiState, area: Rect) {
     frame.render_widget(placeholder, area);
 }
 
-fn format_schedule(schedule: &starkbot_api::types::Schedule) -> String {
-    match schedule {
-        starkbot_api::types::Schedule::EveryMinutes(m) => format!("every {}m", m),
-        starkbot_api::types::Schedule::EveryHours(h) => format!("every {}h", h),
-    }
-}
 
 fn draw_data(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
     let chunks = Layout::default()
@@ -1308,35 +1295,26 @@ fn draw_scheduling(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
         .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
         .split(area);
 
-    // Task list
-    let list_focused = state.schedule_focus == ScheduleFocus::List;
+    // Flow list
+    let list_focused = state.flows_focus == FlowsFocus::List;
     let mut items: Vec<Line> = vec![];
-    if state.scheduled_tasks.is_empty() {
-        items.push(Line::from(Span::styled("  No scheduled tasks", Style::default().fg(Color::DarkGray))));
+    if state.flows.is_empty() {
+        items.push(Line::from(Span::styled("  No flows", Style::default().fg(Color::DarkGray))));
         items.push(Line::from(Span::styled("  Create via GUI", Style::default().fg(Color::DarkGray))));
     } else {
-        for (i, t) in state.scheduled_tasks.iter().enumerate() {
-            let is_selected = i == state.selected_schedule;
+        for (i, f) in state.flows.iter().enumerate() {
+            let is_selected = i == state.selected_flow;
             let style = if is_selected && list_focused {
                 Style::default().fg(Color::Cyan).bold()
             } else {
                 Style::default()
             };
             let marker = if is_selected { "▸ " } else { "  " };
-            let enabled_badge = if t.enabled {
-                Span::styled(" ON ", Style::default().fg(Color::Green))
-            } else {
-                Span::styled(" OFF", Style::default().fg(Color::Red))
-            };
-            items.push(Line::from(vec![
-                Span::styled(format!("{}{}", marker, t.name), style),
-                Span::raw(" "),
-                enabled_badge,
-            ]));
+            items.push(Line::from(Span::styled(format!("{}{}", marker, f.name), style)));
             items.push(Line::from(vec![
                 Span::raw("    "),
                 Span::styled(
-                    format!("{} | {} nodes", format_schedule(&t.schedule), t.node_count),
+                    format!("{} nodes | {}", f.node_count, f.updated_at.get(..10).unwrap_or(&f.updated_at)),
                     Style::default().fg(Color::DarkGray),
                 ),
             ]));
@@ -1344,53 +1322,24 @@ fn draw_scheduling(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
     }
     let list_border = if list_focused { Color::Cyan } else { Color::DarkGray };
     let list = Paragraph::new(items)
-        .block(Block::default().borders(Borders::ALL).title(" Scheduled Tasks ")
-            .title_bottom(Line::from(" d: delete | e: toggle ").right_aligned())
+        .block(Block::default().borders(Borders::ALL).title(" Flows ")
+            .title_bottom(Line::from(" d: delete ").right_aligned())
             .border_style(Style::default().fg(list_border)));
     frame.render_widget(list, chunks[0]);
 
     // Detail
-    let detail_focused = state.schedule_focus == ScheduleFocus::Detail;
+    let detail_focused = state.flows_focus == FlowsFocus::Detail;
     let mut detail_lines: Vec<Line> = vec![];
-    if state.selected_schedule < state.scheduled_tasks.len() {
-        let t = &state.scheduled_tasks[state.selected_schedule];
-        detail_lines.push(Line::from(Span::styled(format!(" Task: {}", t.name), Style::default().fg(Color::White).bold())));
-        detail_lines.push(Line::from(Span::styled(format!(" Schedule: {}", format_schedule(&t.schedule)), Style::default().fg(Color::Yellow))));
-        detail_lines.push(Line::from(Span::styled(format!(" Enabled: {}", if t.enabled { "yes" } else { "no" }), Style::default().fg(if t.enabled { Color::Green } else { Color::Red }))));
-        detail_lines.push(Line::from(Span::styled(format!(" Nodes: {}", t.node_count), Style::default().fg(Color::DarkGray))));
-        detail_lines.push(Line::from(Span::styled(format!(" Created: {}", t.created_at.get(..10).unwrap_or(&t.created_at)), Style::default().fg(Color::DarkGray))));
+    if state.selected_flow < state.flows.len() {
+        let f = &state.flows[state.selected_flow];
+        detail_lines.push(Line::from(Span::styled(format!(" Flow: {}", f.name), Style::default().fg(Color::White).bold())));
+        detail_lines.push(Line::from(Span::styled(format!(" Nodes: {}", f.node_count), Style::default().fg(Color::DarkGray))));
+        detail_lines.push(Line::from(Span::styled(format!(" Created: {}", f.created_at.get(..10).unwrap_or(&f.created_at)), Style::default().fg(Color::DarkGray))));
+        detail_lines.push(Line::from(Span::styled(format!(" Updated: {}", f.updated_at.get(..10).unwrap_or(&f.updated_at)), Style::default().fg(Color::DarkGray))));
         detail_lines.push(Line::from(""));
-
-        // If we have the full task loaded, show flow details
-        if let Some(ref task) = state.viewing_schedule {
-            if task.id == t.id {
-                detail_lines.push(Line::from(Span::styled(" Flow Nodes:", Style::default().fg(Color::Cyan))));
-                for node in &task.flow.nodes {
-                    let type_str = match node.node_type {
-                        starkbot_api::types::FlowNodeType::Prompt => "prompt",
-                        starkbot_api::types::FlowNodeType::Branch => "branch",
-                    };
-                    let data_preview = node.data.to_string();
-                    let data_short = truncate_str(&data_preview, 50);
-                    detail_lines.push(Line::from(vec![
-                        Span::styled(format!("   [{}] ", type_str), Style::default().fg(Color::Yellow)),
-                        Span::raw(data_short),
-                    ]));
-                }
-                if !task.flow.edges.is_empty() {
-                    detail_lines.push(Line::from(""));
-                    detail_lines.push(Line::from(Span::styled(" Flow Edges:", Style::default().fg(Color::Cyan))));
-                    for edge in &task.flow.edges {
-                        detail_lines.push(Line::from(Span::styled(
-                            format!("   {} -> {}", edge.source, edge.target),
-                            Style::default().fg(Color::DarkGray),
-                        )));
-                    }
-                }
-            }
-        }
+        detail_lines.push(Line::from(Span::styled("  Edit flows in the GUI", Style::default().fg(Color::DarkGray))));
     } else {
-        detail_lines.push(Line::from(Span::styled("  Select a task to view", Style::default().fg(Color::DarkGray))));
+        detail_lines.push(Line::from(Span::styled("  Select a flow to view", Style::default().fg(Color::DarkGray))));
     }
     let detail_border = if detail_focused { Color::Cyan } else { Color::DarkGray };
     let detail = Paragraph::new(detail_lines)
