@@ -137,6 +137,12 @@ async fn open_folder(path: String) -> Result<(), String> {
     open::that(&path).map_err(|e| e.to_string())
 }
 
+/// Tauri command: open a URL in the default browser.
+#[tauri::command]
+async fn open_url(url: String) -> Result<(), String> {
+    open::that(&url).map_err(|e| e.to_string())
+}
+
 /// Tauri command: request a state snapshot.
 #[tauri::command]
 async fn request_snapshot(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
@@ -268,6 +274,7 @@ fn main() {
             request_snapshot,
             get_initial_snapshot,
             open_folder,
+            open_url,
             load_session,
             delete_session,
             flow_save,
