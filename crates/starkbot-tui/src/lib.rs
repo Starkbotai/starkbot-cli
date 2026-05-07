@@ -26,12 +26,13 @@ pub enum ActiveView {
     Data,
     Scheduling,
     ApiKeys,
+    Packs,
     Settings,
 }
 
 impl ActiveView {
     pub fn titles() -> Vec<&'static str> {
-        vec!["Chat", "Skills", "Graph", "Personas", "Memory", "Data", "Scheduling", "API Keys", "Settings"]
+        vec!["Chat", "Skills", "Graph", "Personas", "Memory", "Data", "Scheduling", "API Keys", "Packs", "Settings"]
     }
 
     pub fn index(&self) -> usize {
@@ -44,7 +45,8 @@ impl ActiveView {
             Self::Data => 5,
             Self::Scheduling => 6,
             Self::ApiKeys => 7,
-            Self::Settings => 8,
+            Self::Packs => 8,
+            Self::Settings => 9,
         }
     }
 
@@ -57,13 +59,14 @@ impl ActiveView {
             5 => Self::Data,
             6 => Self::Scheduling,
             7 => Self::ApiKeys,
-            8 => Self::Settings,
+            8 => Self::Packs,
+            9 => Self::Settings,
             _ => Self::Chat,
         }
     }
 
     pub fn next(&self) -> Self {
-        Self::from_index((self.index() + 1) % 9)
+        Self::from_index((self.index() + 1) % 10)
     }
 }
 
@@ -125,6 +128,12 @@ pub enum FlowsFocus {
     Detail,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+pub enum PacksFocus {
+    List,
+    Detail,
+}
+
 /// TUI application state.
 pub struct TuiState {
     pub active_view: ActiveView,
@@ -173,6 +182,13 @@ pub struct TuiState {
     pub flows: Vec<FlowSummary>,
     pub selected_flow: usize,
     pub flows_focus: FlowsFocus,
+    // Packs state
+    pub remote_packs: Vec<starkbot_api::types::PackInfo>,
+    pub selected_pack: usize,
+    pub packs_focus: PacksFocus,
+    pub packs_search: String,
+    pub packs_loading: bool,
+    pub packs_message: Option<String>,
 }
 
 impl TuiState {
@@ -223,6 +239,12 @@ impl TuiState {
             flows: vec![],
             selected_flow: 0,
             flows_focus: FlowsFocus::List,
+            remote_packs: vec![],
+            selected_pack: 0,
+            packs_focus: PacksFocus::List,
+            packs_search: String::new(),
+            packs_loading: false,
+            packs_message: None,
         }
     }
 
@@ -319,6 +341,12 @@ impl TuiState {
             flows: vec![],
             selected_flow: 0,
             flows_focus: FlowsFocus::List,
+            remote_packs: vec![],
+            selected_pack: 0,
+            packs_focus: PacksFocus::List,
+            packs_search: String::new(),
+            packs_loading: false,
+            packs_message: None,
         }
     }
 
@@ -410,6 +438,29 @@ impl TuiState {
             BackendEvent::IntegrationsUpdated(_) => {
                 // Integration updates displayed in GUI only
             }
+            BackendEvent::EventsLogUpdated(_) => {
+                // Events log displayed in GUI only
+            }
+            BackendEvent::PacksListed(packs) => {
+                self.remote_packs = packs.clone();
+                self.packs_loading = false;
+                self.selected_pack = 0;
+                self.packs_message = None;
+            }
+            BackendEvent::PackInstalled { slug } => {
+                self.packs_loading = false;
+                self.packs_message = Some(format!("Installed '{}'", slug));
+                // Mark as installed in local list
+                for p in &mut self.remote_packs {
+                    if p.slug == *slug {
+                        p.installed = true;
+                    }
+                }
+            }
+            BackendEvent::PackError { message } => {
+                self.packs_loading = false;
+                self.packs_message = Some(format!("Error: {}", message));
+            }
         }
     }
 
@@ -449,6 +500,7 @@ pub fn handle_key(state: &mut TuiState, key: KeyEvent) -> Option<FrontendCommand
         ActiveView::Data => handle_data_key(state, key),
         ActiveView::Scheduling => handle_scheduling_key(state, key),
         ActiveView::ApiKeys => handle_api_keys_key(state, key),
+        ActiveView::Packs => handle_packs_key(state, key),
         ActiveView::Settings => handle_settings_key(state, key),
     }
 }
@@ -741,6 +793,104 @@ fn handle_scheduling_key(state: &mut TuiState, key: KeyEvent) -> Option<Frontend
     None
 }
 
+fn handle_packs_key(state: &mut TuiState, key: KeyEvent) -> Option<FrontendCommand> {
+    match key.code {
+        KeyCode::Tab => { state.active_view = state.active_view.next(); }
+        KeyCode::Char('h') | KeyCode::Left => {
+            state.packs_focus = PacksFocus::List;
+        }
+        KeyCode::Char('l') | KeyCode::Right => {
+            if !state.remote_packs.is_empty() {
+                state.packs_focus = PacksFocus::Detail;
+            }
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if state.packs_focus == PacksFocus::List {
+                state.selected_pack = state.selected_pack.saturating_sub(1);
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if state.packs_focus == PacksFocus::List {
+                let filtered = filtered_packs(state);
+                if state.selected_pack + 1 < filtered.len() {
+                    state.selected_pack += 1;
+                }
+            }
+        }
+        KeyCode::Char('r') => {
+            // Refresh: fetch packs from server
+            state.packs_loading = true;
+            state.packs_message = Some("Fetching packs...".to_string());
+            return Some(FrontendCommand::PacksList);
+        }
+        KeyCode::Enter | KeyCode::Char('i') => {
+            // Install selected pack
+            let filtered = filtered_packs(state);
+            if let Some(pack) = filtered.get(state.selected_pack) {
+                if !pack.installed {
+                    let slug = pack.slug.clone();
+                    state.packs_loading = true;
+                    state.packs_message = Some(format!("Installing '{}'...", slug));
+                    return Some(FrontendCommand::PackInstall { slug });
+                }
+            }
+        }
+        KeyCode::Char('d') => {
+            // Uninstall selected pack
+            let filtered = filtered_packs(state);
+            if let Some(pack) = filtered.get(state.selected_pack) {
+                if pack.installed {
+                    let slug = pack.slug.clone();
+                    state.packs_message = Some(format!("Uninstalling '{}'...", slug));
+                    // Mark as uninstalled locally
+                    for p in &mut state.remote_packs {
+                        if p.slug == slug {
+                            p.installed = false;
+                        }
+                    }
+                    return Some(FrontendCommand::PackUninstall { slug });
+                }
+            }
+        }
+        KeyCode::Char('/') => {
+            // Start search (just clear to let user type)
+            state.packs_search.clear();
+            state.selected_pack = 0;
+        }
+        KeyCode::Backspace => {
+            state.packs_search.pop();
+            state.selected_pack = 0;
+        }
+        KeyCode::Esc => {
+            if !state.packs_search.is_empty() {
+                state.packs_search.clear();
+                state.selected_pack = 0;
+            }
+        }
+        KeyCode::Char(c) if !c.is_ascii_control() && state.packs_focus == PacksFocus::List => {
+            // Type-to-search
+            if c != 'h' && c != 'l' && c != 'k' && c != 'j' && c != 'r' && c != 'i' && c != 'd' {
+                state.packs_search.push(c);
+                state.selected_pack = 0;
+            }
+        }
+        _ => {}
+    }
+    None
+}
+
+fn filtered_packs(state: &TuiState) -> Vec<starkbot_api::types::PackInfo> {
+    if state.packs_search.is_empty() {
+        return state.remote_packs.clone();
+    }
+    let q = state.packs_search.to_lowercase();
+    state.remote_packs.iter()
+        .filter(|p| p.name.to_lowercase().contains(&q) || p.slug.to_lowercase().contains(&q)
+            || p.description.to_lowercase().contains(&q))
+        .cloned()
+        .collect()
+}
+
 fn handle_settings_key(state: &mut TuiState, key: KeyEvent) -> Option<FrontendCommand> {
     match key.code {
         KeyCode::Tab => state.active_view = state.active_view.next(),
@@ -814,6 +964,7 @@ pub fn draw(frame: &mut ratatui::Frame, state: &TuiState) {
         ActiveView::Data => draw_data(frame, state, chunks[1]),
         ActiveView::Scheduling => draw_scheduling(frame, state, chunks[1]),
         ActiveView::ApiKeys => draw_api_keys(frame, state, chunks[1]),
+        ActiveView::Packs => draw_packs(frame, state, chunks[1]),
         ActiveView::Settings => draw_settings(frame, state, chunks[1]),
     }
 
@@ -1450,6 +1601,144 @@ fn draw_api_keys(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
     let detail = Paragraph::new(detail_lines)
         .block(Block::default().borders(Borders::ALL).title(" Details "))
         .wrap(Wrap { trim: false });
+    frame.render_widget(detail, chunks[1]);
+}
+
+fn draw_packs(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .split(area);
+
+    let filtered = filtered_packs(state);
+
+    // --- Left: pack list ---
+    let list_focused = state.packs_focus == PacksFocus::List;
+    let mut items: Vec<Line> = vec![];
+
+    // Search bar
+    if !state.packs_search.is_empty() {
+        items.push(Line::from(vec![
+            Span::styled(" Search: ", Style::default().fg(Color::Yellow)),
+            Span::styled(&state.packs_search, Style::default().fg(Color::White).bold()),
+        ]));
+        items.push(Line::from(""));
+    }
+
+    if state.packs_loading && filtered.is_empty() {
+        items.push(Line::from(Span::styled("  Loading...", Style::default().fg(Color::Yellow))));
+    } else if filtered.is_empty() {
+        items.push(Line::from(Span::styled(
+            if state.remote_packs.is_empty() {
+                "  Press 'r' to fetch packs"
+            } else {
+                "  No packs match search"
+            },
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        for (i, pack) in filtered.iter().enumerate() {
+            let is_selected = i == state.selected_pack;
+            let style = if is_selected && list_focused {
+                Style::default().fg(Color::Cyan).bold()
+            } else {
+                Style::default()
+            };
+            let marker = if is_selected { "▸ " } else { "  " };
+            let status = if pack.installed { " ✓" } else { "" };
+            items.push(Line::from(vec![
+                Span::styled(format!("{}{}", marker, pack.name), style),
+                Span::styled(status, Style::default().fg(Color::Green)),
+            ]));
+            items.push(Line::from(Span::styled(
+                format!("    {}", truncate_str(&pack.description, 40)),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+    }
+
+    let mut list_title = " Packs ".to_string();
+    if !state.remote_packs.is_empty() {
+        list_title = format!(" Packs ({}) ", filtered.len());
+    }
+    let list_block = Block::default()
+        .borders(Borders::ALL)
+        .title(list_title)
+        .title_bottom(Line::from(" r: refresh │ /: search │ Esc: clear ").right_aligned())
+        .border_style(Style::default().fg(if list_focused { Color::Cyan } else { Color::DarkGray }));
+    let list = Paragraph::new(items).block(list_block);
+    frame.render_widget(list, chunks[0]);
+
+    // --- Right: detail pane ---
+    let detail_focused = state.packs_focus == PacksFocus::Detail;
+    let mut detail_lines: Vec<Line> = vec![];
+
+    if let Some(pack) = filtered.get(state.selected_pack) {
+        detail_lines.push(Line::from(""));
+        detail_lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(&pack.name, Style::default().fg(Color::Cyan).bold()),
+            if pack.installed {
+                Span::styled("  (installed)", Style::default().fg(Color::Green))
+            } else {
+                Span::styled("  (not installed)", Style::default().fg(Color::DarkGray))
+            },
+        ]));
+        detail_lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(format!("slug: {}", pack.slug), Style::default().fg(Color::DarkGray)),
+        ]));
+        detail_lines.push(Line::from(""));
+        detail_lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::raw(&pack.description),
+        ]));
+        if let Some(icon) = &pack.icon {
+            detail_lines.push(Line::from(vec![
+                Span::raw("  icon: "),
+                Span::styled(icon, Style::default().fg(Color::Yellow)),
+            ]));
+        }
+        detail_lines.push(Line::from(""));
+        detail_lines.push(Line::from(""));
+
+        // Action hints
+        if pack.installed {
+            detail_lines.push(Line::from(Span::styled(
+                "  Press 'd' to uninstall",
+                Style::default().fg(Color::Red),
+            )));
+        } else {
+            detail_lines.push(Line::from(Span::styled(
+                "  Press Enter or 'i' to install",
+                Style::default().fg(Color::Green),
+            )));
+        }
+    } else {
+        detail_lines.push(Line::from(Span::styled(
+            "  Select a pack to view details",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    // Status message
+    if let Some(msg) = &state.packs_message {
+        detail_lines.push(Line::from(""));
+        let color = if msg.starts_with("Error") { Color::Red } else { Color::Yellow };
+        detail_lines.push(Line::from(Span::styled(
+            format!("  {}", msg),
+            Style::default().fg(color),
+        )));
+    }
+
+    let detail_block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Details ")
+        .title_bottom(Line::from(" i: install │ d: uninstall ").right_aligned())
+        .border_style(Style::default().fg(if detail_focused { Color::Cyan } else { Color::DarkGray }));
+    let detail = Paragraph::new(detail_lines)
+        .wrap(Wrap { trim: false })
+        .block(detail_block);
     frame.render_widget(detail, chunks[1]);
 }
 

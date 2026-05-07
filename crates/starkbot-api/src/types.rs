@@ -86,6 +86,16 @@ pub struct IntegrationPresetInfo {
     pub has_flow_template: bool,
 }
 
+/// Info about a pack available on the extension server.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackInfo {
+    pub slug: String,
+    pub name: String,
+    pub description: String,
+    pub icon: Option<String>,
+    pub installed: bool,
+}
+
 /// Info about a flow template available from an installed integration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlowTemplateInfo {

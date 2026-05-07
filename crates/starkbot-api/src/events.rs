@@ -43,6 +43,12 @@ pub enum BackendEvent {
     IntegrationsUpdated(Vec<crate::types::IntegrationPresetInfo>),
     /// Internal events log updated.
     EventsLogUpdated(Vec<crate::types::InternalEventDto>),
+    /// Remote packs list fetched from extension server.
+    PacksListed(Vec<crate::types::PackInfo>),
+    /// A pack was installed successfully.
+    PackInstalled { slug: String },
+    /// A pack operation failed.
+    PackError { message: String },
 }
 
 /// Commands sent from any frontend to the engine.
@@ -92,6 +98,12 @@ pub enum FrontendCommand {
     FlowListTemplates,
     /// Load the internal events log.
     EventsLogLoad,
+    /// Fetch available packs from the extension server.
+    PacksList,
+    /// Install a pack from the extension server by slug.
+    PackInstall { slug: String },
+    /// Uninstall a local pack by slug.
+    PackUninstall { slug: String },
     /// Shutdown the engine.
     Shutdown,
 }
