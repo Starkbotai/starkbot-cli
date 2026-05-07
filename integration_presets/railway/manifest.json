@@ -5,5 +5,5 @@
   "requires": {
     "api_key": "RAILWAY_TOKEN"
   },
-  "skills": []
+  "skills": ["railway-manage.md"]
 }
