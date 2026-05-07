@@ -17,11 +17,6 @@ jobs:
             os: ubuntu-latest
             name: linux-x86_64
             ext: tar.gz
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            name: linux-aarch64
-            ext: tar.gz
-            cross: true
           - target: x86_64-apple-darwin
             os: macos-latest
             name: macos-x86_64
@@ -60,17 +55,8 @@ jobs:
           npm ci
           npm run build
 
-      - name: Install cross
-        if: matrix.cross
-        run: cargo install cross
-
       - name: Build
-        run: |
-          if [ "${{ matrix.cross }}" = "true" ]; then
-            cross build --release -p starkbot-tauri --target ${{ matrix.target }}
-          else
-            cargo build --release -p starkbot-tauri --target ${{ matrix.target }}
-          fi
+        run: cargo build --release -p starkbot-tauri --target ${{ matrix.target }}
         shell: bash
 
       - name: Package (unix)
