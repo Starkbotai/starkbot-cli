@@ -220,7 +220,7 @@ See [docs/current_gaps.md](docs/current_gaps.md) for a detailed gap analysis aga
 
 ## Releases
 
-Pre-built binaries are available on the [Releases](RELEASES.md) page.
+Pre-built binaries are available on the [Releases](https://github.com/Starkbotai/starkbot-cli/releases) page.
 
 To build release binaries locally:
 
