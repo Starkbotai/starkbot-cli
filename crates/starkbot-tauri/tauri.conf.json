@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicegui/nicegui/main/nicegui/tauri/v2/tauri.conf.json",
   "productName": "StarkBot",
-  "version": "0.1.0",
+  "version": "0.1.9",
   "identifier": "com.starkbot.gui",
   "build": {
     "frontendDist": "frontend/dist"

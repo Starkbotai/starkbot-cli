@@ -1062,9 +1062,14 @@ impl crate::backend::Backend for StarkbotEngine {
                             }
 
                             FrontendCommand::IntegrationInstall { preset_id, api_keys: install_keys } => {
-                                let preset_dir = app_config.integration_presets_dir().join(&preset_id);
-                                let presets = integrations::list_presets(&app_config.integration_presets_dir());
-                                let manifest = presets.iter().find(|(id, _)| id == &preset_id).map(|(_, m)| m.clone());
+                                // Look in bundled presets first, then installed packs
+                                let bundled_dir = app_config.integration_presets_dir().join(&preset_id);
+                                let preset_dir = if bundled_dir.join("manifest.json").exists() {
+                                    bundled_dir
+                                } else {
+                                    app_config.packs_dir().join(&preset_id)
+                                };
+                                let manifest = integrations::load_manifest(&preset_dir);
 
                                 // Save API keys if provided
                                 if !install_keys.is_empty() {
@@ -1125,6 +1130,27 @@ impl crate::backend::Backend for StarkbotEngine {
                             }
 
                             FrontendCommand::IntegrationUninstall { preset_id } => {
+                                // Load manifest to know what to clean up
+                                let bundled = app_config.integration_presets_dir().join(&preset_id);
+                                let preset_dir = if bundled.join("manifest.json").exists() {
+                                    bundled
+                                } else {
+                                    app_config.packs_dir().join(&preset_id)
+                                };
+                                if let Some(manifest) = integrations::load_manifest(&preset_dir) {
+                                    // Remove copied skill files
+                                    for skill_file in &manifest.skills {
+                                        let dst = skills_dir.join(skill_file);
+                                        let _ = std::fs::remove_file(&dst);
+                                    }
+                                    // Remove custom configs directory
+                                    if !manifest.custom_configs.is_empty() {
+                                        let custom_dest = app_config.custom_dir().join(&preset_id);
+                                        let _ = std::fs::remove_dir_all(&custom_dest);
+                                    }
+                                }
+
+                                // Remove from registry
                                 let mut registry = integrations::IntegrationRegistry::load(&app_config.integrations_path());
                                 registry.uninstall(&preset_id);
                                 let _ = registry.save(&app_config.integrations_path());
@@ -1139,10 +1165,15 @@ impl crate::backend::Backend for StarkbotEngine {
                             }
 
                             FrontendCommand::IntegrationImportFlow { preset_id } => {
-                                let presets = integrations::list_presets(&app_config.integration_presets_dir());
-                                if let Some((_, manifest)) = presets.iter().find(|(id, _)| id == &preset_id) {
+                                let bundled = app_config.integration_presets_dir().join(&preset_id);
+                                let preset_dir = if bundled.join("manifest.json").exists() {
+                                    bundled
+                                } else {
+                                    app_config.packs_dir().join(&preset_id)
+                                };
+                                if let Some(manifest) = integrations::load_manifest(&preset_dir) {
                                     if let Some(ref template_file) = manifest.flow_template {
-                                        let template_path = app_config.integration_presets_dir().join(&preset_id).join(template_file);
+                                        let template_path = preset_dir.join(template_file);
                                         match std::fs::read_to_string(&template_path) {
                                             Ok(content) => {
                                                 match serde_json::from_str::<SavedFlow>(&content) {
@@ -1507,7 +1538,13 @@ fn find_bundled_dir(name: &str) -> Option<PathBuf> {
 }
 
 fn build_integrations_list(app_config: &AppConfig) -> Vec<IntegrationPresetInfo> {
-    let presets = integrations::list_presets(&app_config.integration_presets_dir());
+    let mut presets = integrations::list_presets(&app_config.integration_presets_dir());
+    // Also include installed packs so they appear in the integrations list
+    for (id, manifest) in integrations::list_presets(&app_config.packs_dir()) {
+        if !presets.iter().any(|(existing_id, _)| existing_id == &id) {
+            presets.push((id, manifest));
+        }
+    }
     let registry = integrations::IntegrationRegistry::load(&app_config.integrations_path());
     let key_store = KeyStore::load(&app_config.keys_path()).unwrap_or_default();
 
@@ -1543,7 +1580,12 @@ fn build_integrations_list(app_config: &AppConfig) -> Vec<IntegrationPresetInfo>
 }
 
 fn build_flow_templates_list(app_config: &AppConfig) -> Vec<FlowTemplateInfo> {
-    let presets = integrations::list_presets(&app_config.integration_presets_dir());
+    let mut presets = integrations::list_presets(&app_config.integration_presets_dir());
+    for (id, manifest) in integrations::list_presets(&app_config.packs_dir()) {
+        if !presets.iter().any(|(existing_id, _)| existing_id == &id) {
+            presets.push((id, manifest));
+        }
+    }
     let registry = integrations::IntegrationRegistry::load(&app_config.integrations_path());
     let mut templates = Vec::new();
     for (id, manifest) in &presets {

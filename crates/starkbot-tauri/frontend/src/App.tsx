@@ -19,8 +19,7 @@ const TABS: { id: View; label: string }[] = [
   { id: "data", label: "Data" },
   { id: "flows", label: "Flows" },
   { id: "api-keys", label: "Integrations" },
-  { id: "packs", label: "Packs" },
-  { id: "settings", label: "Settings" },
+{ id: "settings", label: "Settings" },
 ];
 
 function OpenFolderButton({ view, snapshot }: { view: View; snapshot: any }) {
