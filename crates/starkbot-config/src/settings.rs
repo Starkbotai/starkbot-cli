@@ -11,10 +11,18 @@ pub struct Settings {
     /// Auto-approve tool calls without prompting.
     #[serde(default)]
     pub auto_approve: bool,
+
+    /// Extension server URL for fetching hyperpacks.
+    #[serde(default = "default_extension_server")]
+    pub extension_server: String,
 }
 
 fn default_model() -> String {
     "gpt-5.4".to_string()
+}
+
+fn default_extension_server() -> String {
+    "https://hyperpacks.org".to_string()
 }
 
 impl Default for Settings {
@@ -22,6 +30,7 @@ impl Default for Settings {
         Self {
             model: default_model(),
             auto_approve: false,
+            extension_server: default_extension_server(),
         }
     }
 }
@@ -70,6 +79,7 @@ mod tests {
         let s = Settings::default();
         assert_eq!(s.model, "gpt-5.4");
         assert!(!s.auto_approve);
+        assert_eq!(s.extension_server, "https://hyperpacks.org");
     }
 
     #[test]

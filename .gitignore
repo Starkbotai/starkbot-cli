@@ -8,3 +8,4 @@ test-traces/
 test-report.json
 **/dist/
 releases/
+test_fixtures/

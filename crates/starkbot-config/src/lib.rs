@@ -4,6 +4,7 @@ pub mod manifest;
 pub mod sessions;
 pub mod schedules;
 pub mod integrations;
+pub mod packs;
 
 use std::path::{Path, PathBuf};
 
@@ -75,6 +76,10 @@ impl AppConfig {
 
     pub fn custom_dir(&self) -> PathBuf {
         self.root.join("custom")
+    }
+
+    pub fn packs_dir(&self) -> PathBuf {
+        self.root.join("packs")
     }
 
     pub fn integrations_path(&self) -> PathBuf {

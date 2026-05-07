@@ -58,9 +58,9 @@ fn stub_dota_install(
         .parent().unwrap()
         .parent().unwrap()
         .to_path_buf();
-    let preset_skill = workspace_root.join("integration_presets/dota/dota-game.md");
+    let preset_skill = workspace_root.join("test_fixtures/dota/dota-game.md");
     std::fs::copy(&preset_skill, skills_dir.join("dota-game.md"))
-        .expect("Failed to copy dota-game.md from integration_presets/dota/");
+        .expect("Failed to copy dota-game.md from test_fixtures/dota/");
 
     // Write keys to a temp keystore
     let keys_path = tmp.join("keys.json");
