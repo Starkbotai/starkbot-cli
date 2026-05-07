@@ -8,8 +8,9 @@ import SettingsView from "./components/SettingsView";
 import ApiKeysView from "./components/ApiKeysView";
 import DataView from "./components/DataView";
 import SchedulingView from "./components/SchedulingView";
+import PacksView from "./components/PacksView";
 
-type View = "chat" | "skills" | "personas" | "data" | "flows" | "api-keys" | "settings";
+type View = "chat" | "skills" | "personas" | "data" | "flows" | "api-keys" | "packs" | "settings";
 
 const TABS: { id: View; label: string }[] = [
   { id: "chat", label: "Chat" },
@@ -18,6 +19,7 @@ const TABS: { id: View; label: string }[] = [
   { id: "data", label: "Data" },
   { id: "flows", label: "Flows" },
   { id: "api-keys", label: "Integrations" },
+  { id: "packs", label: "Packs" },
   { id: "settings", label: "Settings" },
 ];
 
@@ -142,6 +144,16 @@ export default function App() {
             onInstall={backend.installIntegration}
             onUninstall={backend.uninstallIntegration}
             onImportFlow={backend.importIntegrationFlow}
+          />
+        )}
+        {activeView === "packs" && (
+          <PacksView
+            packs={backend.remotePacks}
+            loading={backend.packsLoading}
+            message={backend.packsMessage}
+            onListPacks={backend.listPacks}
+            onInstall={backend.installPack}
+            onUninstall={backend.uninstallPack}
           />
         )}
         {activeView === "settings" && (

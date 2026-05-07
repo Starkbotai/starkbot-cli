@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import type { AppSnapshot, BackendEvent, ChatMessage, ChatSession, SessionSummary, SavedFlow, FlowSummary, FlowLogEntry, FlowTemplateInfo, CustomFileEntry, InternalEvent } from "../types";
+import type { AppSnapshot, BackendEvent, ChatMessage, ChatSession, SessionSummary, SavedFlow, FlowSummary, FlowLogEntry, FlowTemplateInfo, CustomFileEntry, InternalEvent, PackInfo } from "../types";
 
 interface PendingApproval {
   request_id: string;
@@ -34,6 +34,9 @@ interface BackendState {
   runningFlows: number;
   flowTemplates: FlowTemplateInfo[];
   internalEvents: InternalEvent[];
+  remotePacks: PackInfo[];
+  packsLoading: boolean;
+  packsMessage: string | null;
 }
 
 export function useBackend() {
@@ -56,6 +59,9 @@ export function useBackend() {
     runningFlows: 0,
     flowTemplates: [],
     internalEvents: [],
+    remotePacks: [],
+    packsLoading: false,
+    packsMessage: null,
   });
 
   const messagesRef = useRef(state.messages);
@@ -216,6 +222,18 @@ export function useBackend() {
           : prev.snapshot;
         return { ...prev, snapshot: updatedSnapshot };
       }
+      if ("PacksListed" in evt) {
+        return { ...prev, remotePacks: evt.PacksListed, packsLoading: false, packsMessage: null };
+      }
+      if ("PackInstalled" in evt) {
+        const updated = prev.remotePacks.map((p) =>
+          p.slug === evt.PackInstalled.slug ? { ...p, installed: true } : p
+        );
+        return { ...prev, remotePacks: updated, packsLoading: false, packsMessage: `Installed '${evt.PackInstalled.slug}'` };
+      }
+      if ("PackError" in evt) {
+        return { ...prev, packsLoading: false, packsMessage: `Error: ${evt.PackError.message}` };
+      }
       if ("Snapshot" in evt) {
         const snapshot = evt.Snapshot;
         return {
@@ -367,6 +385,25 @@ export function useBackend() {
     await invoke("write_custom_file", { path, content });
   }, []);
 
+  const listPacks = useCallback(async () => {
+    setState((prev) => ({ ...prev, packsLoading: true, packsMessage: "Fetching packs..." }));
+    await invoke("packs_list");
+  }, []);
+
+  const installPack = useCallback(async (slug: string) => {
+    setState((prev) => ({ ...prev, packsLoading: true, packsMessage: `Installing '${slug}'...` }));
+    await invoke("pack_install", { slug });
+  }, []);
+
+  const uninstallPack = useCallback(async (slug: string) => {
+    setState((prev) => ({
+      ...prev,
+      remotePacks: prev.remotePacks.map((p) => p.slug === slug ? { ...p, installed: false } : p),
+      packsMessage: `Uninstalled '${slug}'`,
+    }));
+    await invoke("pack_uninstall", { slug });
+  }, []);
+
   return {
     ...state,
     sendMessage,
@@ -394,5 +431,8 @@ export function useBackend() {
     listCustomFiles,
     readCustomFile,
     writeCustomFile,
+    listPacks,
+    installPack,
+    uninstallPack,
   };
 }

@@ -1182,6 +1182,66 @@ impl crate::backend::Backend for StarkbotEngine {
                                 let _ = event_tx.send(BackendEvent::FlowTemplatesListed(templates));
                             }
 
+                            FrontendCommand::PacksList => {
+                                let settings = starkbot_config::settings::Settings::load(&app_config.settings_path())
+                                    .unwrap_or_default();
+                                let client = starkbot_config::packs::PackClient::new(&settings, app_config.packs_dir());
+                                let etx = event_tx.clone();
+                                tokio::spawn(async move {
+                                    match client.list_remote().await {
+                                        Ok(summaries) => {
+                                            let packs: Vec<PackInfo> = summaries.into_iter().map(|s| {
+                                                let installed = client.is_installed(&s.slug);
+                                                PackInfo {
+                                                    slug: s.slug,
+                                                    name: s.name,
+                                                    description: s.description,
+                                                    icon: s.icon,
+                                                    installed,
+                                                }
+                                            }).collect();
+                                            let _ = etx.send(BackendEvent::PacksListed(packs));
+                                        }
+                                        Err(e) => {
+                                            let _ = etx.send(BackendEvent::PackError { message: e });
+                                        }
+                                    }
+                                });
+                            }
+
+                            FrontendCommand::PackInstall { slug } => {
+                                let settings = starkbot_config::settings::Settings::load(&app_config.settings_path())
+                                    .unwrap_or_default();
+                                let client = starkbot_config::packs::PackClient::new(&settings, app_config.packs_dir());
+                                let etx = event_tx.clone();
+                                let s = slug.clone();
+                                tokio::spawn(async move {
+                                    match client.install(&s).await {
+                                        Ok(_) => {
+                                            let _ = etx.send(BackendEvent::PackInstalled { slug: s });
+                                        }
+                                        Err(e) => {
+                                            let _ = etx.send(BackendEvent::PackError { message: e });
+                                        }
+                                    }
+                                });
+                            }
+
+                            FrontendCommand::PackUninstall { slug } => {
+                                let settings = starkbot_config::settings::Settings::load(&app_config.settings_path())
+                                    .unwrap_or_default();
+                                let client = starkbot_config::packs::PackClient::new(&settings, app_config.packs_dir());
+                                match client.uninstall(&slug) {
+                                    Ok(_) => {
+                                        let msg = format!("Pack '{}' uninstalled.", slug);
+                                        emit(&BackendEvent::Info { message: msg });
+                                    }
+                                    Err(e) => {
+                                        emit(&BackendEvent::PackError { message: e });
+                                    }
+                                }
+                            }
+
                             FrontendCommand::Shutdown => {
                                 shutdown_flag.store(true, Ordering::Relaxed);
                                 break;

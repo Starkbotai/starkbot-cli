@@ -131,6 +131,14 @@ export interface IntegrationPresetInfo {
   has_flow_template: boolean;
 }
 
+export interface PackInfo {
+  slug: string;
+  name: string;
+  description: string;
+  icon: string | null;
+  installed: boolean;
+}
+
 export interface FlowTemplateInfo {
   preset_id: string;
   preset_name: string;
@@ -192,4 +200,7 @@ export type BackendEvent =
   | { FlowRunningCount: { count: number } }
   | { FlowTemplatesListed: FlowTemplateInfo[] }
   | { IntegrationsUpdated: IntegrationPresetInfo[] }
-  | { EventsLogUpdated: InternalEvent[] };
+  | { EventsLogUpdated: InternalEvent[] }
+  | { PacksListed: PackInfo[] }
+  | { PackInstalled: { slug: string } }
+  | { PackError: { message: string } };

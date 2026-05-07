@@ -152,6 +152,27 @@ async fn flow_list_templates(state: tauri::State<'_, Arc<AppState>>) -> Result<(
         .map_err(|e| format!("Failed to send: {}", e))
 }
 
+/// Tauri command: fetch packs list from extension server.
+#[tauri::command]
+async fn packs_list(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::PacksList)
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
+/// Tauri command: install a pack from extension server.
+#[tauri::command]
+async fn pack_install(slug: String, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::PackInstall { slug })
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
+/// Tauri command: uninstall a local pack.
+#[tauri::command]
+async fn pack_uninstall(slug: String, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::PackUninstall { slug })
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
 /// Tauri command: list files in the custom/ directory.
 #[tauri::command]
 async fn list_custom_files(_state: tauri::State<'_, Arc<starkbot_api::types::AppSnapshot>>) -> Result<Vec<CustomFileEntry>, String> {
@@ -384,6 +405,9 @@ fn main() {
             list_custom_files,
             read_custom_file,
             write_custom_file,
+            packs_list,
+            pack_install,
+            pack_uninstall,
         ])
         .run(tauri::generate_context!("tauri.conf.json"))
         .expect("error while running tauri application");
