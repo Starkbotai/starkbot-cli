@@ -238,6 +238,7 @@ impl TuiState {
             version: s.version.clone(),
             tags: s.tags.clone(),
             requires_tools: s.requires_tools.clone(),
+            requires_keys: s.requires_keys.clone(),
             content: s.content.clone(),
             file_path: PathBuf::new(),
         }).collect();
@@ -402,6 +403,12 @@ impl TuiState {
             }
             BackendEvent::FlowRunningCount { .. } => {
                 // Running flow count displayed in GUI only
+            }
+            BackendEvent::FlowTemplatesListed(_) => {
+                // Flow templates displayed in GUI only
+            }
+            BackendEvent::IntegrationsUpdated(_) => {
+                // Integration updates displayed in GUI only
             }
         }
     }

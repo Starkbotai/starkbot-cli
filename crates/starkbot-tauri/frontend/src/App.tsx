@@ -111,12 +111,16 @@ export default function App() {
               setActiveView("chat");
             }}
             onLoadFlowLogs={backend.loadFlowLogs}
+            onListCustomFiles={backend.listCustomFiles}
+            onReadCustomFile={backend.readCustomFile}
+            onWriteCustomFile={backend.writeCustomFile}
           />
         )}
         {activeView === "flows" && (
           <SchedulingView
             flows={backend.flows}
             editingFlow={backend.editingFlow}
+            flowTemplates={backend.flowTemplates}
             onSaveFlow={backend.saveFlow}
             onLoadFlow={backend.loadFlow}
             onDeleteFlow={backend.deleteFlow}
@@ -124,6 +128,8 @@ export default function App() {
             onRunFlowOnce={backend.runFlowOnce}
             onListFlows={backend.listFlows}
             onClearEditingFlow={backend.clearEditingFlow}
+            onListFlowTemplates={backend.listFlowTemplates}
+            onImportFlowTemplate={backend.importIntegrationFlow}
           />
         )}
         {activeView === "api-keys" && (
@@ -133,6 +139,7 @@ export default function App() {
             onDelete={backend.deleteApiKey}
             onInstall={backend.installIntegration}
             onUninstall={backend.uninstallIntegration}
+            onImportFlow={backend.importIntegrationFlow}
           />
         )}
         {activeView === "settings" && (

@@ -11,12 +11,27 @@ pub struct IntegrationManifest {
     pub requires: IntegrationRequires,
     #[serde(default)]
     pub skills: Vec<String>,
+    /// Filename of a .json flow template in the preset dir.
+    #[serde(default)]
+    pub flow_template: Option<String>,
+    /// Paths relative to preset dir to copy into custom/{preset_id}/ on install.
+    #[serde(default)]
+    pub custom_configs: Vec<String>,
+}
+
+/// A single required key entry for multi-key integrations.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequiredKey {
+    pub name: String,
+    pub label: String,
 }
 
 /// What an integration requires to function.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct IntegrationRequires {
     pub api_key: Option<String>,
+    #[serde(default)]
+    pub api_keys: Vec<RequiredKey>,
 }
 
 /// A single installed integration entry.
@@ -133,6 +148,31 @@ mod tests {
         assert!(loaded.is_installed("github"));
 
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_multi_key_manifest() {
+        let json = r#"{
+            "name": "Test Multi",
+            "description": "Multi-key test",
+            "icon": "star",
+            "requires": {
+                "api_keys": [
+                    { "name": "KEY_A", "label": "Key A" },
+                    { "name": "KEY_B", "label": "Key B" }
+                ]
+            },
+            "skills": [],
+            "flow_template": "test-flow.json",
+            "custom_configs": ["custom/config.json"]
+        }"#;
+        let manifest: IntegrationManifest = serde_json::from_str(json).unwrap();
+        assert_eq!(manifest.requires.api_keys.len(), 2);
+        assert_eq!(manifest.requires.api_keys[0].name, "KEY_A");
+        assert_eq!(manifest.requires.api_keys[1].label, "Key B");
+        assert!(manifest.requires.api_key.is_none());
+        assert_eq!(manifest.flow_template.as_deref(), Some("test-flow.json"));
+        assert_eq!(manifest.custom_configs, vec!["custom/config.json"]);
     }
 
     #[test]

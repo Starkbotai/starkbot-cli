@@ -148,6 +148,7 @@ impl StarkbotEngine {
                     version: s.version.clone(),
                     tags: s.tags.clone(),
                     requires_tools: s.requires_tools.clone(),
+                    requires_keys: s.requires_keys.clone(),
                     content: s.content.clone(),
                 })
                 .collect();
@@ -595,10 +596,9 @@ impl crate::backend::Backend for StarkbotEngine {
                             }
 
                             FrontendCommand::RequestSnapshot => {
-                                // Build snapshot from current state
-                                // Note: some fields (skills, personas, graph) are static after init
-                                // We send a snapshot event
-                                emit(&BackendEvent::Info { message: "Snapshot requested".to_string() });
+                                // Rebuild integrations list (picks up newly seeded presets)
+                                integrations_cache = build_integrations_list(&app_config);
+                                let _ = event_tx.send(BackendEvent::IntegrationsUpdated(integrations_cache.clone()));
                             }
 
                             FrontendCommand::LoadSession { session_id } => {
@@ -745,6 +745,7 @@ impl crate::backend::Backend for StarkbotEngine {
 
                                         let mut session_messages: Vec<ChatSessionMessage> = Vec::new();
                                         let mut all_succeeded = true;
+                                        let mut last_error: Option<String> = None;
 
                                         for (_i, prompt_text) in prompts.iter().enumerate() {
 
@@ -823,16 +824,19 @@ impl crate::backend::Backend for StarkbotEngine {
                                                 Ok(Err(err)) => {
                                                     session_messages.push(ChatSessionMessage {
                                                         role: "error".to_string(),
-                                                        content: err,
+                                                        content: err.clone(),
                                                     });
+                                                    last_error = Some(err);
                                                     all_succeeded = false;
                                                     break;
                                                 }
                                                 Err(_) => {
+                                                    let msg = "Internal error: result channel closed".to_string();
                                                     session_messages.push(ChatSessionMessage {
                                                         role: "error".to_string(),
-                                                        content: "Internal error: result channel closed".to_string(),
+                                                        content: msg.clone(),
                                                     });
+                                                    last_error = Some(msg);
                                                     all_succeeded = false;
                                                     break;
                                                 }
@@ -861,7 +865,13 @@ impl crate::backend::Backend for StarkbotEngine {
                                         let _ = flow_event_tx.send(BackendEvent::SessionsUpdated(updated_sessions));
 
                                         // Log result
-                                        let detail = if all_succeeded { "completed successfully".to_string() } else { "completed with errors".to_string() };
+                                        let detail = if all_succeeded {
+                                            "completed successfully".to_string()
+                                        } else if let Some(ref err) = last_error {
+                                            format!("error: {}", err)
+                                        } else {
+                                            "completed with errors".to_string()
+                                        };
                                         schedules::append_flow_log(&flow_app_config.flow_logs_path(), &FlowLogEntry {
                                             timestamp: chrono::Local::now().to_rfc3339(),
                                             flow_id: flow_id_clone,
@@ -896,34 +906,51 @@ impl crate::backend::Backend for StarkbotEngine {
                                 let _ = event_tx.send(BackendEvent::FlowsListed(flows));
                             }
 
-                            FrontendCommand::IntegrationInstall { preset_id, api_key: install_key } => {
-                                // Save API key if provided
-                                if let Some(key_value) = install_key {
+                            FrontendCommand::IntegrationInstall { preset_id, api_keys: install_keys } => {
+                                let preset_dir = app_config.integration_presets_dir().join(&preset_id);
+                                let presets = integrations::list_presets(&app_config.integration_presets_dir());
+                                let manifest = presets.iter().find(|(id, _)| id == &preset_id).map(|(_, m)| m.clone());
+
+                                // Save API keys if provided
+                                if !install_keys.is_empty() {
                                     let keys_path = app_config.keys_path();
                                     if let Ok(mut store) = KeyStore::load(&keys_path) {
-                                        // Look up the key name from the manifest
-                                        let presets = integrations::list_presets(&app_config.integration_presets_dir());
-                                        if let Some((_, manifest)) = presets.iter().find(|(id, _)| id == &preset_id) {
-                                            if let Some(ref key_name) = manifest.requires.api_key {
-                                                store.upsert(key_name, &key_value);
-                                                let _ = store.save(&keys_path);
-                                                api_keys_cache = store.list_masked().into_iter()
-                                                    .map(|(n, m)| ApiKeyInfo { name: n, masked_key: m })
-                                                    .collect();
-                                            }
+                                        for (key_name, key_value) in &install_keys {
+                                            store.upsert(key_name, key_value);
                                         }
+                                        let _ = store.save(&keys_path);
+                                        api_keys_cache = store.list_masked().into_iter()
+                                            .map(|(n, m)| ApiKeyInfo { name: n, masked_key: m })
+                                            .collect();
                                     }
                                 }
 
                                 // Copy skill files from preset to skills dir
-                                let preset_dir = app_config.integration_presets_dir().join(&preset_id);
-                                let presets = integrations::list_presets(&app_config.integration_presets_dir());
-                                if let Some((_, manifest)) = presets.iter().find(|(id, _)| id == &preset_id) {
+                                if let Some(ref manifest) = manifest {
                                     for skill_file in &manifest.skills {
                                         let src = preset_dir.join(skill_file);
                                         let dst = skills_dir.join(skill_file);
                                         if src.exists() && !dst.exists() {
                                             let _ = std::fs::copy(&src, &dst);
+                                        }
+                                    }
+
+                                    // Copy custom configs from preset dir to custom/{preset_id}/
+                                    if !manifest.custom_configs.is_empty() {
+                                        let custom_dest = app_config.custom_dir().join(&preset_id);
+                                        let _ = std::fs::create_dir_all(&custom_dest);
+                                        for config_path in &manifest.custom_configs {
+                                            let src = preset_dir.join(config_path);
+                                            if src.exists() {
+                                                // Preserve relative path structure under custom/{preset_id}/
+                                                let filename = std::path::Path::new(config_path)
+                                                    .file_name()
+                                                    .unwrap_or_default();
+                                                let dst = custom_dest.join(filename);
+                                                if !dst.exists() {
+                                                    let _ = std::fs::copy(&src, &dst);
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -933,8 +960,9 @@ impl crate::backend::Backend for StarkbotEngine {
                                 registry.install(&preset_id);
                                 let _ = registry.save(&app_config.integrations_path());
 
-                                // Rebuild integrations list
+                                // Rebuild integrations list and notify frontend
                                 integrations_cache = build_integrations_list(&app_config);
+                                let _ = event_tx.send(BackendEvent::IntegrationsUpdated(integrations_cache.clone()));
 
                                 let msg = format!("Integration '{}' installed.", preset_id);
                                 messages.push(ChatMessageDto { role: "assistant".to_string(), content: msg.clone() });
@@ -946,12 +974,57 @@ impl crate::backend::Backend for StarkbotEngine {
                                 registry.uninstall(&preset_id);
                                 let _ = registry.save(&app_config.integrations_path());
 
-                                // Rebuild integrations list
+                                // Rebuild integrations list and notify frontend
                                 integrations_cache = build_integrations_list(&app_config);
+                                let _ = event_tx.send(BackendEvent::IntegrationsUpdated(integrations_cache.clone()));
 
                                 let msg = format!("Integration '{}' uninstalled.", preset_id);
                                 messages.push(ChatMessageDto { role: "assistant".to_string(), content: msg.clone() });
                                 emit(&BackendEvent::Info { message: msg });
+                            }
+
+                            FrontendCommand::IntegrationImportFlow { preset_id } => {
+                                let presets = integrations::list_presets(&app_config.integration_presets_dir());
+                                if let Some((_, manifest)) = presets.iter().find(|(id, _)| id == &preset_id) {
+                                    if let Some(ref template_file) = manifest.flow_template {
+                                        let template_path = app_config.integration_presets_dir().join(&preset_id).join(template_file);
+                                        match std::fs::read_to_string(&template_path) {
+                                            Ok(content) => {
+                                                match serde_json::from_str::<SavedFlow>(&content) {
+                                                    Ok(mut flow) => {
+                                                        // Assign new ID and timestamps
+                                                        flow.id = uuid::Uuid::new_v4().to_string();
+                                                        let now = chrono::Local::now().to_rfc3339();
+                                                        flow.created_at = now.clone();
+                                                        flow.updated_at = now;
+                                                        flow.enabled = false;
+                                                        let flow_path = app_config.flows_dir().join(format!("{}.json", flow.id));
+                                                        let json = serde_json::to_string_pretty(&flow).unwrap_or_default();
+                                                        let _ = std::fs::write(&flow_path, &json);
+                                                        let flows = schedules::list_flows(&app_config.flows_dir());
+                                                        let _ = event_tx.send(BackendEvent::FlowsListed(flows));
+                                                        let msg = format!("Flow template '{}' imported from {}.", flow.name, manifest.name);
+                                                        messages.push(ChatMessageDto { role: "assistant".to_string(), content: msg.clone() });
+                                                        emit(&BackendEvent::Info { message: msg });
+                                                    }
+                                                    Err(e) => {
+                                                        let msg = format!("Failed to parse flow template: {}", e);
+                                                        emit(&BackendEvent::Error { message: msg });
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                let msg = format!("Failed to read flow template: {}", e);
+                                                emit(&BackendEvent::Error { message: msg });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            FrontendCommand::FlowListTemplates => {
+                                let templates = build_flow_templates_list(&app_config);
+                                let _ = event_tx.send(BackendEvent::FlowTemplatesListed(templates));
                             }
 
                             FrontendCommand::Shutdown => {
@@ -1225,24 +1298,58 @@ fn build_integrations_list(app_config: &AppConfig) -> Vec<IntegrationPresetInfo>
         .into_iter()
         .map(|(id, manifest)| {
             let installed = registry.is_installed(&id);
-            let configured = manifest
-                .requires
-                .api_key
-                .as_ref()
-                .map(|k| key_store.get(k).is_some())
-                .unwrap_or(true);
+            // Check if all required keys are configured
+            let configured = if !manifest.requires.api_keys.is_empty() {
+                manifest.requires.api_keys.iter().all(|k| key_store.get(&k.name).is_some())
+            } else {
+                manifest.requires.api_key.as_ref()
+                    .map(|k| key_store.get(k).is_some())
+                    .unwrap_or(true)
+            };
+            let required_keys: Vec<RequiredKeyInfo> = manifest.requires.api_keys.iter()
+                .map(|k| RequiredKeyInfo { name: k.name.clone(), label: k.label.clone() })
+                .collect();
             IntegrationPresetInfo {
                 id,
                 name: manifest.name,
                 description: manifest.description,
                 icon: manifest.icon,
                 api_key_name: manifest.requires.api_key,
+                required_keys,
                 skills: manifest.skills,
                 installed,
                 configured,
+                has_flow_template: manifest.flow_template.is_some(),
             }
         })
         .collect()
+}
+
+fn build_flow_templates_list(app_config: &AppConfig) -> Vec<FlowTemplateInfo> {
+    let presets = integrations::list_presets(&app_config.integration_presets_dir());
+    let registry = integrations::IntegrationRegistry::load(&app_config.integrations_path());
+    let mut templates = Vec::new();
+    for (id, manifest) in &presets {
+        if registry.is_installed(id) {
+            if let Some(ref template_file) = manifest.flow_template {
+                // Try to read the flow name from the template file
+                let template_path = app_config.integration_presets_dir().join(id).join(template_file);
+                let template_name = if let Ok(content) = std::fs::read_to_string(&template_path) {
+                    serde_json::from_str::<SavedFlow>(&content)
+                        .map(|f| f.name)
+                        .unwrap_or_else(|_| template_file.clone())
+                } else {
+                    template_file.clone()
+                };
+                templates.push(FlowTemplateInfo {
+                    preset_id: id.clone(),
+                    preset_name: manifest.name.clone(),
+                    template_name,
+                });
+            }
+        }
+    }
+    templates
 }
 
 fn migrate_keys_from_db(app_config: &AppConfig) {

@@ -37,6 +37,10 @@ pub enum BackendEvent {
     FlowLogsLoaded(Vec<crate::types::FlowLogEntry>),
     /// Number of currently running flows changed.
     FlowRunningCount { count: usize },
+    /// Available flow templates from installed integrations.
+    FlowTemplatesListed(Vec<crate::types::FlowTemplateInfo>),
+    /// The integrations list was updated.
+    IntegrationsUpdated(Vec<crate::types::IntegrationPresetInfo>),
 }
 
 /// Commands sent from any frontend to the engine.
@@ -77,9 +81,13 @@ pub enum FrontendCommand {
     /// List all saved flows.
     FlowList,
     /// Install an integration preset.
-    IntegrationInstall { preset_id: String, api_key: Option<String> },
+    IntegrationInstall { preset_id: String, api_keys: Vec<(String, String)> },
     /// Uninstall an integration preset.
     IntegrationUninstall { preset_id: String },
+    /// Import a flow template from an installed integration preset.
+    IntegrationImportFlow { preset_id: String },
+    /// List available flow templates from installed integrations.
+    FlowListTemplates,
     /// Shutdown the engine.
     Shutdown,
 }

@@ -75,6 +75,9 @@ impl AgentRunner {
         let tools = persona.resolved_tools_with_skills(&skill_registry);
 
         // Build tool registry first (data-driven: descriptions live on each Tool impl)
+        let custom_dir = keys_path.as_ref()
+            .and_then(|p| p.parent())
+            .map(|root| root.join("custom"));
         let tool_config = starkbot_tools::ToolConfig {
             api_key: api_key.to_string(),
             model_name: model_name.to_string(),
@@ -82,6 +85,7 @@ impl AgentRunner {
             skills_dir: skills_dir.to_path_buf(),
             available_skills: skills,
             keys_path,
+            custom_dir,
         };
         let registry = starkbot_tools::create_registry_for_with_config(&tools, Some(&tool_config));
 

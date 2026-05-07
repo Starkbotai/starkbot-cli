@@ -120,7 +120,15 @@ impl Persona {
 
     /// All resolved skill names for this persona.
     /// Uses explicit_skills plus any skills discovered via skill_tags from the registry.
+    /// If the persona has `load_skill` in its tools, all installed skills are available.
     pub fn resolved_skills(&self, registry: &starkbot_skills::SkillRegistry) -> Vec<String> {
+        // If persona has load_skill, it can load any installed skill
+        if self.tools().contains(&"load_skill".to_string()) {
+            let mut skills: Vec<String> = registry.names().into_iter().map(String::from).collect();
+            skills.sort();
+            return skills;
+        }
+
         let mut skills: Vec<String> = self.explicit_skills.clone();
 
         // Add legacy skills

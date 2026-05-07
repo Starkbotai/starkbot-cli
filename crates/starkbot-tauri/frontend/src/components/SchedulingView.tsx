@@ -1,10 +1,11 @@
 import { useState, useEffect } from "react";
-import type { SavedFlow, FlowSummary } from "../types";
+import type { SavedFlow, FlowSummary, FlowTemplateInfo } from "../types";
 import FlowEditor from "./flow/FlowEditor";
 
 interface Props {
   flows: FlowSummary[];
   editingFlow: SavedFlow | null;
+  flowTemplates: FlowTemplateInfo[];
   onSaveFlow: (flow: SavedFlow) => void;
   onLoadFlow: (flowId: string) => void;
   onDeleteFlow: (flowId: string) => void;
@@ -12,11 +13,14 @@ interface Props {
   onRunFlowOnce: (flowId: string) => void;
   onListFlows: () => void;
   onClearEditingFlow: () => void;
+  onListFlowTemplates: () => void;
+  onImportFlowTemplate: (presetId: string) => void;
 }
 
 export default function FlowsView({
   flows,
   editingFlow,
+  flowTemplates,
   onSaveFlow,
   onLoadFlow,
   onDeleteFlow,
@@ -24,9 +28,12 @@ export default function FlowsView({
   onRunFlowOnce,
   onListFlows,
   onClearEditingFlow,
+  onListFlowTemplates,
+  onImportFlowTemplate,
 }: Props) {
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [showFlowEditor, setShowFlowEditor] = useState(false);
+  const [showTemplates, setShowTemplates] = useState(false);
 
   // Load flows list on mount
   useEffect(() => {
@@ -49,6 +56,16 @@ export default function FlowsView({
     onSaveFlow(newFlow);
     onLoadFlow(id);
     setShowFlowEditor(true);
+  };
+
+  const handleNewFromTemplate = () => {
+    onListFlowTemplates();
+    setShowTemplates(true);
+  };
+
+  const handleImportTemplate = (presetId: string) => {
+    onImportFlowTemplate(presetId);
+    setShowTemplates(false);
   };
 
   const handleEditFlow = () => {
@@ -84,13 +101,53 @@ export default function FlowsView({
       <div className="w-[40%] border-r border-surface-3 flex flex-col">
         <div className="flex items-center justify-between p-2 border-b border-surface-3">
           <span className="text-xs text-gray-500">{flows.length} flow{flows.length !== 1 ? "s" : ""}</span>
-          <button
-            onClick={handleNewFlow}
-            className="px-2 py-0.5 text-xs rounded bg-accent/20 text-accent hover:bg-accent/30"
-          >
-            + New
-          </button>
+          <div className="flex gap-1">
+            <button
+              onClick={handleNewFromTemplate}
+              className="px-2 py-0.5 text-xs rounded text-gray-400 hover:text-gray-200 hover:bg-surface-2"
+              title="Create flow from an integration template"
+            >
+              From Template
+            </button>
+            <button
+              onClick={handleNewFlow}
+              className="px-2 py-0.5 text-xs rounded bg-accent/20 text-accent hover:bg-accent/30"
+            >
+              + New
+            </button>
+          </div>
         </div>
+
+        {/* Template picker dropdown */}
+        {showTemplates && (
+          <div className="border-b border-surface-3 bg-surface-1 p-3">
+            {flowTemplates.length === 0 ? (
+              <div className="text-xs text-gray-500">
+                No templates available. Install an integration with a flow template first.
+              </div>
+            ) : (
+              <div className="space-y-1">
+                <div className="text-xs text-gray-500 mb-1">Import a flow template:</div>
+                {flowTemplates.map((t) => (
+                  <button
+                    key={t.preset_id}
+                    onClick={() => handleImportTemplate(t.preset_id)}
+                    className="w-full text-left px-3 py-2 rounded border border-surface-3 hover:border-gray-500 bg-surface-2 transition-colors"
+                  >
+                    <div className="text-sm text-white">{t.template_name}</div>
+                    <div className="text-[10px] text-gray-500">from {t.preset_name}</div>
+                  </button>
+                ))}
+              </div>
+            )}
+            <button
+              onClick={() => setShowTemplates(false)}
+              className="mt-2 text-xs text-gray-500 hover:text-gray-300"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
 
         <div className="flex-1 overflow-y-auto">
           {flows.length === 0 ? (

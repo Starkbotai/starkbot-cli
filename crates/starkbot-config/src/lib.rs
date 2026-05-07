@@ -73,6 +73,10 @@ impl AppConfig {
         self.root.join("integration_presets")
     }
 
+    pub fn custom_dir(&self) -> PathBuf {
+        self.root.join("custom")
+    }
+
     pub fn integrations_path(&self) -> PathBuf {
         self.root.join("integrations.json")
     }
@@ -99,6 +103,7 @@ impl AppConfig {
             &self.sessions_dir(),
             &self.flows_dir(),
             &self.integration_presets_dir(),
+            &self.custom_dir(),
         ];
         for dir in &dirs {
             std::fs::create_dir_all(dir)

@@ -119,8 +119,8 @@ async fn flow_list(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String>
 
 /// Tauri command: install an integration preset.
 #[tauri::command]
-async fn integration_install(preset_id: String, api_key: Option<String>, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
-    state.cmd_tx.send(FrontendCommand::IntegrationInstall { preset_id, api_key })
+async fn integration_install(preset_id: String, api_keys: Vec<(String, String)>, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::IntegrationInstall { preset_id, api_keys })
         .map_err(|e| format!("Failed to send: {}", e))
 }
 
@@ -129,6 +129,91 @@ async fn integration_install(preset_id: String, api_key: Option<String>, state: 
 async fn integration_uninstall(preset_id: String, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
     state.cmd_tx.send(FrontendCommand::IntegrationUninstall { preset_id })
         .map_err(|e| format!("Failed to send: {}", e))
+}
+
+/// Tauri command: import a flow template from an installed integration.
+#[tauri::command]
+async fn integration_import_flow(preset_id: String, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::IntegrationImportFlow { preset_id })
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
+/// Tauri command: list available flow templates from installed integrations.
+#[tauri::command]
+async fn flow_list_templates(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::FlowListTemplates)
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
+/// Tauri command: list files in the custom/ directory.
+#[tauri::command]
+async fn list_custom_files(_state: tauri::State<'_, Arc<starkbot_api::types::AppSnapshot>>) -> Result<Vec<CustomFileEntry>, String> {
+    let config = starkbot_config::AppConfig::open();
+    let custom_dir = config.custom_dir();
+    if !custom_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut entries = Vec::new();
+    list_dir_recursive(&custom_dir, &custom_dir, &mut entries)?;
+    Ok(entries)
+}
+
+/// Tauri command: read a custom file.
+#[tauri::command]
+async fn read_custom_file(path: String) -> Result<String, String> {
+    let config = starkbot_config::AppConfig::open();
+    let full_path = config.custom_dir().join(&path);
+    // Security: ensure the path is within custom_dir
+    let canonical = full_path.canonicalize().map_err(|e| format!("Invalid path: {}", e))?;
+    let custom_canonical = config.custom_dir().canonicalize().map_err(|e| format!("Custom dir error: {}", e))?;
+    if !canonical.starts_with(&custom_canonical) {
+        return Err("Path traversal not allowed".to_string());
+    }
+    std::fs::read_to_string(&canonical).map_err(|e| format!("Failed to read: {}", e))
+}
+
+/// Tauri command: write a custom file.
+#[tauri::command]
+async fn write_custom_file(path: String, content: String) -> Result<(), String> {
+    let config = starkbot_config::AppConfig::open();
+    let full_path = config.custom_dir().join(&path);
+    // Ensure parent exists
+    if let Some(parent) = full_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // Security: ensure the path is within custom_dir after creating parent
+    let canonical = full_path.canonicalize().unwrap_or(full_path.clone());
+    let custom_canonical = config.custom_dir().canonicalize().map_err(|e| format!("Custom dir error: {}", e))?;
+    if !canonical.starts_with(&custom_canonical) {
+        return Err("Path traversal not allowed".to_string());
+    }
+    std::fs::write(&full_path, content).map_err(|e| format!("Failed to write: {}", e))
+}
+
+#[derive(serde::Serialize)]
+struct CustomFileEntry {
+    path: String,
+    name: String,
+    is_dir: bool,
+}
+
+fn list_dir_recursive(base: &std::path::Path, dir: &std::path::Path, entries: &mut Vec<CustomFileEntry>) -> Result<(), String> {
+    let read = std::fs::read_dir(dir).map_err(|e| format!("Failed to read {}: {}", dir.display(), e))?;
+    for entry in read.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let rel = path.strip_prefix(base).unwrap_or(&path);
+        let name = entry.file_name().to_string_lossy().to_string();
+        let is_dir = path.is_dir();
+        entries.push(CustomFileEntry {
+            path: rel.to_string_lossy().to_string(),
+            name,
+            is_dir,
+        });
+        if is_dir {
+            list_dir_recursive(base, &path, entries)?;
+        }
+    }
+    Ok(())
 }
 
 /// Tauri command: open a folder in the OS file manager.
@@ -286,6 +371,11 @@ fn main() {
             flow_logs_load,
             integration_install,
             integration_uninstall,
+            integration_import_flow,
+            flow_list_templates,
+            list_custom_files,
+            read_custom_file,
+            write_custom_file,
         ])
         .run(tauri::generate_context!("tauri.conf.json"))
         .expect("error while running tauri application");

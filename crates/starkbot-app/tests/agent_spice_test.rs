@@ -44,6 +44,7 @@ impl AgentUnderTest for StarkBotAgent {
             skills_dir: skills_dir.clone(),
             available_skills: persona.skills_list(),
             keys_path: None,
+            custom_dir: None,
         };
         let registry = starkbot_tools::create_registry_for_with_config(&persona.tools(), Some(&tool_config));
 

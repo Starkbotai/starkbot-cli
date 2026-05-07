@@ -1,0 +1,36 @@
+{
+  "id": "template-dota-checkin",
+  "name": "DOTA Check-in Loop",
+  "flow": {
+    "nodes": [
+      {
+        "id": "entry-1",
+        "node_type": "entry",
+        "data": {
+          "schedule": "*/2 * * * *",
+          "label": "Every 2 minutes"
+        },
+        "position": [100, 100]
+      },
+      {
+        "id": "prompt-1",
+        "node_type": "prompt",
+        "data": {
+          "prompt": "You are an AI agent playing Defense of the Agents. Execute this game loop:\n\nStep 1 — Load the skill:\n  load_skill(\"dota-game\")\n\nStep 2 — Get credentials:\n  api_key_read(\"DOTA_API_KEY\") → store as $API_KEY\n  api_key_read(\"DOTA_AGENT_NAME\") → store as $AGENT_NAME\n\nStep 3 — Check game state:\n  bash: curl -s https://wc2-agentic-dev-3o6un.ondigitalocean.app/api/game/state?game=3\n  Parse the JSON. Find your hero by matching $AGENT_NAME in the heroes array.\n\nStep 4 — Decide and deploy:\n  Based on the game state, build a deployment JSON and POST it:\n  bash: curl -s -X POST https://wc2-agentic-dev-3o6un.ondigitalocean.app/api/strategy/deployment \\\n    -H \"Authorization: Bearer $API_KEY\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{...your deployment...}'\n\n  If this is your FIRST deployment, include heroClass and heroLane.\n  If you have abilityChoices, pick one with abilityChoice.\n  If HP is low, use action: \"recall\".\n  Always include a message describing your strategy.\n\nStep 5 — Summarize what you did and why in 2-3 sentences.",
+          "label": "DOTA Check-in"
+        },
+        "position": [100, 250]
+      }
+    ],
+    "edges": [
+      {
+        "id": "edge-1",
+        "source": "entry-1",
+        "target": "prompt-1"
+      }
+    ]
+  },
+  "created_at": "2026-05-06T00:00:00Z",
+  "updated_at": "2026-05-06T00:00:00Z",
+  "enabled": false
+}

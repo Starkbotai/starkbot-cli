@@ -10,6 +10,7 @@ pub struct Skill {
     pub version: String,
     pub tags: Vec<String>,
     pub requires_tools: Vec<String>,
+    pub requires_keys: Vec<String>,
     pub content: String,
     pub file_path: PathBuf,
 }
@@ -72,7 +73,7 @@ impl SkillRegistry {
         let content = std::fs::read_to_string(path).ok()?;
         let name = path.file_stem()?.to_str()?.to_string();
 
-        let (description, version, tags, requires_tools) = parse_frontmatter(&content);
+        let (description, version, tags, requires_tools, requires_keys) = parse_frontmatter(&content);
         let body = strip_frontmatter(&content).to_string();
 
         Some(Skill {
@@ -81,6 +82,7 @@ impl SkillRegistry {
             version,
             tags,
             requires_tools,
+            requires_keys,
             content: body,
             file_path: path.to_path_buf(),
         })
@@ -88,16 +90,16 @@ impl SkillRegistry {
 }
 
 /// Parse YAML frontmatter for skill metadata.
-fn parse_frontmatter(content: &str) -> (String, String, Vec<String>, Vec<String>) {
+fn parse_frontmatter(content: &str) -> (String, String, Vec<String>, Vec<String>, Vec<String>) {
     let trimmed = content.trim_start();
     if !trimmed.starts_with("---") {
-        return (String::new(), String::new(), vec![], vec![]);
+        return (String::new(), String::new(), vec![], vec![], vec![]);
     }
 
     let after_open = &trimmed[3..];
     let close_pos = match after_open.find("\n---") {
         Some(p) => p,
-        None => return (String::new(), String::new(), vec![], vec![]),
+        None => return (String::new(), String::new(), vec![], vec![], vec![]),
     };
     let yaml_block = &after_open[..close_pos];
 
@@ -105,6 +107,7 @@ fn parse_frontmatter(content: &str) -> (String, String, Vec<String>, Vec<String>
     let mut version = String::new();
     let mut tags = vec![];
     let mut requires_tools = vec![];
+    let mut requires_keys = vec![];
 
     for line in yaml_block.lines() {
         let line = line.trim();
@@ -116,10 +119,12 @@ fn parse_frontmatter(content: &str) -> (String, String, Vec<String>, Vec<String>
             tags = parse_yaml_list(rest);
         } else if let Some(rest) = line.strip_prefix("requires_tools:") {
             requires_tools = parse_yaml_list(rest);
+        } else if let Some(rest) = line.strip_prefix("requires_keys:") {
+            requires_keys = parse_yaml_list(rest);
         }
     }
 
-    (description, version, tags, requires_tools)
+    (description, version, tags, requires_tools, requires_keys)
 }
 
 fn parse_yaml_list(s: &str) -> Vec<String> {

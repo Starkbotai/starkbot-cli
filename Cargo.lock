@@ -8584,7 +8584,7 @@ dependencies = [
 
 [[package]]
 name = "starkbot-api"
-version = "0.1.2"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8608,7 +8608,7 @@ dependencies = [
 
 [[package]]
 name = "starkbot-app"
-version = "0.1.2"
+version = "0.1.6"
 dependencies = [
  "async-trait",
  "crossterm",
@@ -8624,13 +8624,14 @@ dependencies = [
  "starkbot-core",
  "starkbot-tools",
  "starkbot-tui",
+ "tempfile",
  "tokio",
  "uuid",
 ]
 
 [[package]]
 name = "starkbot-config"
-version = "0.1.2"
+version = "0.1.6"
 dependencies = [
  "chrono",
  "dirs",
@@ -8641,7 +8642,7 @@ dependencies = [
 
 [[package]]
 name = "starkbot-core"
-version = "0.1.2"
+version = "0.1.6"
 dependencies = [
  "async-trait",
  "log",
@@ -8658,7 +8659,7 @@ dependencies = [
 
 [[package]]
 name = "starkbot-db"
-version = "0.1.2"
+version = "0.1.6"
 dependencies = [
  "chrono",
  "log",
@@ -8671,14 +8672,14 @@ dependencies = [
 
 [[package]]
 name = "starkbot-graph"
-version = "0.1.2"
+version = "0.1.6"
 dependencies = [
  "ratatui",
 ]
 
 [[package]]
 name = "starkbot-memory"
-version = "0.1.2"
+version = "0.1.6"
 dependencies = [
  "chrono",
  "log",
@@ -8691,7 +8692,7 @@ dependencies = [
 
 [[package]]
 name = "starkbot-skills"
-version = "0.1.2"
+version = "0.1.6"
 dependencies = [
  "log",
  "serde",
@@ -8701,7 +8702,7 @@ dependencies = [
 
 [[package]]
 name = "starkbot-tauri"
-version = "0.1.2"
+version = "0.1.6"
 dependencies = [
  "chrono",
  "dirs",
@@ -8712,6 +8713,7 @@ dependencies = [
  "serde",
  "serde_json",
  "starkbot-api",
+ "starkbot-config",
  "tauri",
  "tauri-build",
  "tokio",
@@ -8719,7 +8721,7 @@ dependencies = [
 
 [[package]]
 name = "starkbot-tools"
-version = "0.1.2"
+version = "0.1.6"
 dependencies = [
  "async-trait",
  "htmd",
@@ -8738,7 +8740,7 @@ dependencies = [
 
 [[package]]
 name = "starkbot-tui"
-version = "0.1.2"
+version = "0.1.6"
 dependencies = [
  "crossterm",
  "log",

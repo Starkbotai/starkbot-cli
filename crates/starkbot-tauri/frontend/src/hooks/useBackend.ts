@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import type { AppSnapshot, BackendEvent, ChatMessage, ChatSession, SessionSummary, SavedFlow, FlowSummary, FlowLogEntry } from "../types";
+import type { AppSnapshot, BackendEvent, ChatMessage, ChatSession, SessionSummary, SavedFlow, FlowSummary, FlowLogEntry, FlowTemplateInfo, CustomFileEntry } from "../types";
 
 interface PendingApproval {
   request_id: string;
@@ -32,6 +32,7 @@ interface BackendState {
   editingFlow: SavedFlow | null;
   inferenceConfigured: boolean;
   runningFlows: number;
+  flowTemplates: FlowTemplateInfo[];
 }
 
 export function useBackend() {
@@ -52,6 +53,7 @@ export function useBackend() {
     editingFlow: null,
     inferenceConfigured: false,
     runningFlows: 0,
+    flowTemplates: [],
   });
 
   const messagesRef = useRef(state.messages);
@@ -200,6 +202,15 @@ export function useBackend() {
       if ("FlowRunningCount" in evt) {
         return { ...prev, runningFlows: evt.FlowRunningCount.count };
       }
+      if ("FlowTemplatesListed" in evt) {
+        return { ...prev, flowTemplates: evt.FlowTemplatesListed };
+      }
+      if ("IntegrationsUpdated" in evt) {
+        const updatedSnapshot = prev.snapshot
+          ? { ...prev.snapshot, integrations: evt.IntegrationsUpdated }
+          : prev.snapshot;
+        return { ...prev, snapshot: updatedSnapshot };
+      }
       if ("Snapshot" in evt) {
         const snapshot = evt.Snapshot;
         return {
@@ -319,12 +330,32 @@ export function useBackend() {
     setState((prev) => ({ ...prev, editingFlow: null }));
   }, []);
 
-  const installIntegration = useCallback(async (presetId: string, apiKey?: string) => {
-    await invoke("integration_install", { presetId, apiKey: apiKey ?? null });
+  const installIntegration = useCallback(async (presetId: string, apiKeys: [string, string][]) => {
+    await invoke("integration_install", { presetId, apiKeys });
   }, []);
 
   const uninstallIntegration = useCallback(async (presetId: string) => {
     await invoke("integration_uninstall", { presetId });
+  }, []);
+
+  const importIntegrationFlow = useCallback(async (presetId: string) => {
+    await invoke("integration_import_flow", { presetId });
+  }, []);
+
+  const listFlowTemplates = useCallback(async () => {
+    await invoke("flow_list_templates");
+  }, []);
+
+  const listCustomFiles = useCallback(async (): Promise<CustomFileEntry[]> => {
+    return await invoke("list_custom_files");
+  }, []);
+
+  const readCustomFile = useCallback(async (path: string): Promise<string> => {
+    return await invoke("read_custom_file", { path });
+  }, []);
+
+  const writeCustomFile = useCallback(async (path: string, content: string): Promise<void> => {
+    await invoke("write_custom_file", { path, content });
   }, []);
 
   return {
@@ -348,5 +379,10 @@ export function useBackend() {
     clearEditingFlow,
     installIntegration,
     uninstallIntegration,
+    importIntegrationFlow,
+    listFlowTemplates,
+    listCustomFiles,
+    readCustomFile,
+    writeCustomFile,
   };
 }

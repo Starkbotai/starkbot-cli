@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
-import type { SessionSummary, ChatSession, FlowLogEntry } from "../types";
+import type { SessionSummary, ChatSession, FlowLogEntry, CustomFileEntry } from "../types";
 
-type DataTab = "sessions" | "flow-logs";
+type DataTab = "sessions" | "flow-logs" | "custom";
 
 interface Props {
   sessions: SessionSummary[];
@@ -11,6 +11,9 @@ interface Props {
   onDeleteSession: (id: string) => void;
   onResumeSession: (id: string) => void;
   onLoadFlowLogs: () => void;
+  onListCustomFiles: () => Promise<CustomFileEntry[]>;
+  onReadCustomFile: (path: string) => Promise<string>;
+  onWriteCustomFile: (path: string, content: string) => Promise<void>;
 }
 
 export default function DataView({
@@ -21,6 +24,9 @@ export default function DataView({
   onDeleteSession,
   onResumeSession,
   onLoadFlowLogs,
+  onListCustomFiles,
+  onReadCustomFile,
+  onWriteCustomFile,
 }: Props) {
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [tab, setTab] = useState<DataTab>("sessions");
@@ -50,6 +56,14 @@ export default function DataView({
           }`}
         >
           Flow Logs
+        </button>
+        <button
+          onClick={() => setTab("custom")}
+          className={`w-full text-left px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+            tab === "custom" ? "bg-accent/20 text-accent" : "text-gray-400 hover:text-gray-200 hover:bg-surface-2"
+          }`}
+        >
+          Custom
         </button>
       </div>
 
@@ -130,6 +144,158 @@ export default function DataView({
       {tab === "flow-logs" && (
         <FlowLogsPanel flowLogs={flowLogs} onLoadFlowLogs={onLoadFlowLogs} />
       )}
+
+      {tab === "custom" && (
+        <CustomFilesPanel
+          onListFiles={onListCustomFiles}
+          onReadFile={onReadCustomFile}
+          onWriteFile={onWriteCustomFile}
+        />
+      )}
+    </div>
+  );
+}
+
+// --- Custom Files Panel ---
+
+function CustomFilesPanel({
+  onListFiles,
+  onReadFile,
+  onWriteFile,
+}: {
+  onListFiles: () => Promise<CustomFileEntry[]>;
+  onReadFile: (path: string) => Promise<string>;
+  onWriteFile: (path: string, content: string) => Promise<void>;
+}) {
+  const [files, setFiles] = useState<CustomFileEntry[]>([]);
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [fileContent, setFileContent] = useState("");
+  const [editedContent, setEditedContent] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    loadFiles();
+  }, []);
+
+  const loadFiles = async () => {
+    try {
+      const entries = await onListFiles();
+      setFiles(entries);
+    } catch (e) {
+      console.error("Failed to list custom files:", e);
+    }
+  };
+
+  const handleSelect = async (path: string) => {
+    setSelectedFile(path);
+    setEditing(false);
+    try {
+      const content = await onReadFile(path);
+      setFileContent(content);
+      setEditedContent(content);
+    } catch (e) {
+      setFileContent(`Error reading file: ${e}`);
+      setEditedContent("");
+    }
+  };
+
+  const handleSave = async () => {
+    if (!selectedFile) return;
+    setSaving(true);
+    try {
+      await onWriteFile(selectedFile, editedContent);
+      setFileContent(editedContent);
+      setEditing(false);
+    } catch (e) {
+      console.error("Failed to save:", e);
+    }
+    setSaving(false);
+  };
+
+  const fileItems = files.filter((f) => !f.is_dir);
+
+  return (
+    <div className="flex flex-1 h-full">
+      {/* File list */}
+      <div className="w-[35%] border-r border-surface-3 overflow-y-auto">
+        <div className="flex items-center justify-between p-2 border-b border-surface-3">
+          <span className="text-xs text-gray-500">{fileItems.length} file{fileItems.length !== 1 ? "s" : ""}</span>
+          <button
+            onClick={loadFiles}
+            className="px-2 py-1 text-xs rounded text-gray-400 hover:text-gray-200 hover:bg-surface-2"
+          >
+            Refresh
+          </button>
+        </div>
+        {fileItems.length === 0 ? (
+          <div className="p-4 text-sm text-gray-500">
+            No custom files yet. Install an integration with custom configs to populate this folder.
+          </div>
+        ) : (
+          fileItems.map((f) => (
+            <div
+              key={f.path}
+              onClick={() => handleSelect(f.path)}
+              className={`px-3 py-2 cursor-pointer border-b border-surface-2 hover:bg-surface-2 transition-colors ${
+                selectedFile === f.path ? "bg-surface-2 border-l-2 border-l-accent" : ""
+              }`}
+            >
+              <div className="text-sm text-gray-200 truncate font-mono">{f.path}</div>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* File content */}
+      <div className="flex-1 overflow-y-auto p-4 flex flex-col">
+        {selectedFile ? (
+          <>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-medium text-gray-200 font-mono">{selectedFile}</h3>
+              <div className="flex gap-2">
+                {editing ? (
+                  <>
+                    <button
+                      onClick={handleSave}
+                      disabled={saving}
+                      className="px-3 py-1 text-xs rounded bg-green-600 hover:bg-green-500 text-white disabled:opacity-50"
+                    >
+                      {saving ? "Saving..." : "Save"}
+                    </button>
+                    <button
+                      onClick={() => { setEditing(false); setEditedContent(fileContent); }}
+                      className="px-3 py-1 text-xs rounded text-gray-400 hover:text-gray-200 hover:bg-surface-2"
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={() => setEditing(true)}
+                    className="px-3 py-1 text-xs rounded bg-accent/20 text-accent hover:bg-accent/30"
+                  >
+                    Edit
+                  </button>
+                )}
+              </div>
+            </div>
+            {editing ? (
+              <textarea
+                value={editedContent}
+                onChange={(e) => setEditedContent(e.target.value)}
+                className="flex-1 w-full bg-surface-2 border border-surface-3 rounded p-3 text-sm text-gray-200 font-mono resize-none focus:outline-none focus:border-accent/50"
+              />
+            ) : (
+              <pre className="flex-1 bg-surface-2 border border-surface-3 rounded p-3 text-sm text-gray-200 font-mono overflow-auto whitespace-pre-wrap">
+                {fileContent}
+              </pre>
+            )}
+          </>
+        ) : (
+          <div className="text-sm text-gray-500">Select a file to view or edit its contents.</div>
+        )}
+      </div>
     </div>
   );
 }
@@ -271,12 +437,12 @@ function FlowLogsPanel({ flowLogs, onLoadFlowLogs }: { flowLogs: FlowLogEntry[];
                 {expanded && (
                   <div className="border-t border-surface-3 px-3 py-2 space-y-1">
                     {group.entries.map((entry, j) => (
-                      <div key={j} className="flex items-center gap-2 text-xs text-gray-400">
+                      <div key={j} className="flex items-start gap-2 text-xs text-gray-400">
                         <span className="text-[10px] text-gray-600 font-mono whitespace-nowrap">
                           {entry.timestamp.slice(11, 19)}
                         </span>
                         <span className="text-blue-400">{entry.action}</span>
-                        {entry.detail && <span className="text-gray-500">{entry.detail}</span>}
+                        {entry.detail && <span className={`${entry.detail.startsWith("error:") ? "text-red-400" : "text-gray-500"} break-all`}>{entry.detail}</span>}
                       </div>
                     ))}
                   </div>

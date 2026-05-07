@@ -113,15 +113,34 @@ export interface FlowLogEntry {
   run_id?: string;
 }
 
+export interface RequiredKeyInfo {
+  name: string;
+  label: string;
+}
+
 export interface IntegrationPresetInfo {
   id: string;
   name: string;
   description: string;
   icon: string;
   api_key_name: string | null;
+  required_keys: RequiredKeyInfo[];
   skills: string[];
   installed: boolean;
   configured: boolean;
+  has_flow_template: boolean;
+}
+
+export interface FlowTemplateInfo {
+  preset_id: string;
+  preset_name: string;
+  template_name: string;
+}
+
+export interface CustomFileEntry {
+  path: string;
+  name: string;
+  is_dir: boolean;
 }
 
 export interface AppSnapshot {
@@ -164,4 +183,6 @@ export type BackendEvent =
   | { FlowLoaded: SavedFlow }
   | { FlowsListed: FlowSummary[] }
   | { FlowLogsLoaded: FlowLogEntry[] }
-  | { FlowRunningCount: { count: number } };
+  | { FlowRunningCount: { count: number } }
+  | { FlowTemplatesListed: FlowTemplateInfo[] }
+  | { IntegrationsUpdated: IntegrationPresetInfo[] };

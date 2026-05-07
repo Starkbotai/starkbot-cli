@@ -162,6 +162,7 @@ mod tests {
             version: "1.0.0".to_string(),
             tags: vec!["infrastructure".to_string(), "dns".to_string(), "cloudflare".to_string()],
             requires_tools: vec!["web_fetch".to_string()],
+            requires_keys: vec![],
             content: String::new(),
             file_path: PathBuf::new(),
         });
@@ -171,6 +172,7 @@ mod tests {
             version: "1.0.0".to_string(),
             tags: vec!["development".to_string(), "github".to_string(), "git".to_string()],
             requires_tools: vec!["bash".to_string()],
+            requires_keys: vec![],
             content: String::new(),
             file_path: PathBuf::new(),
         });
@@ -180,6 +182,7 @@ mod tests {
             version: "1.0.0".to_string(),
             tags: vec!["methodology".to_string(), "development".to_string()],
             requires_tools: vec!["read_file".to_string()],
+            requires_keys: vec![],
             content: String::new(),
             file_path: PathBuf::new(),
         });

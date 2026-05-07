@@ -1,3 +1,4 @@
+pub mod api_key_read;
 pub mod api_keys_check;
 pub mod bash;
 pub mod edit_file;
@@ -24,6 +25,7 @@ pub struct ToolConfig {
     pub skills_dir: PathBuf,
     pub available_skills: Vec<String>,
     pub keys_path: Option<PathBuf>,
+    pub custom_dir: Option<PathBuf>,
 }
 
 /// Register only the tools listed by name.
@@ -68,6 +70,19 @@ pub fn create_registry_for_with_config(
                     }
                 } else {
                     log::warn!("api_keys_check tool requires ToolConfig, skipping");
+                    registry
+                }
+            }
+            "api_key_read" => {
+                if let Some(cfg) = config {
+                    if let Some(ref keys_path) = cfg.keys_path {
+                        registry.register(api_key_read::ApiKeyReadTool::new(keys_path.clone()))
+                    } else {
+                        log::warn!("api_key_read tool requires keys_path in ToolConfig, skipping");
+                        registry
+                    }
+                } else {
+                    log::warn!("api_key_read tool requires ToolConfig, skipping");
                     registry
                 }
             }

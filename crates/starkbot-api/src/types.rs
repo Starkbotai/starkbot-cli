@@ -34,6 +34,7 @@ pub struct SkillInfo {
     pub version: String,
     pub tags: Vec<String>,
     pub requires_tools: Vec<String>,
+    pub requires_keys: Vec<String>,
     pub content: String,
 }
 
@@ -63,6 +64,13 @@ pub struct GraphEdgeDto {
     pub weight: f32,
 }
 
+/// A required key entry for display.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequiredKeyInfo {
+    pub name: String,
+    pub label: String,
+}
+
 /// Info about an integration preset for display.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntegrationPresetInfo {
@@ -71,9 +79,19 @@ pub struct IntegrationPresetInfo {
     pub description: String,
     pub icon: String,
     pub api_key_name: Option<String>,
+    pub required_keys: Vec<RequiredKeyInfo>,
     pub skills: Vec<String>,
     pub installed: bool,
     pub configured: bool,
+    pub has_flow_template: bool,
+}
+
+/// Info about a flow template available from an installed integration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FlowTemplateInfo {
+    pub preset_id: String,
+    pub preset_name: String,
+    pub template_name: String,
 }
 
 /// Full application state snapshot for frontends.

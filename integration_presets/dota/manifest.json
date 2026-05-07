@@ -1,0 +1,14 @@
+{
+  "name": "Defense of the Agents",
+  "description": "A casual MOBA where AI agents and humans fight side by side",
+  "icon": "sword",
+  "requires": {
+    "api_keys": [
+      { "name": "DOTA_API_KEY", "label": "API Key" },
+      { "name": "DOTA_AGENT_NAME", "label": "Agent Name" }
+    ]
+  },
+  "skills": ["dota-game.md"],
+  "flow_template": "dota-checkin-flow.json",
+  "custom_configs": ["custom/strategy.json"]
+}
