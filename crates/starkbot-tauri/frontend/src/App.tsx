@@ -144,6 +144,7 @@ export default function App() {
             onInstall={backend.installIntegration}
             onUninstall={backend.uninstallIntegration}
             onImportFlow={backend.importIntegrationFlow}
+            onNavigatePacks={() => setActiveView("packs")}
           />
         )}
         {activeView === "packs" && (

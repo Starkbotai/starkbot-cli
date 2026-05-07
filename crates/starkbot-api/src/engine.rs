@@ -1414,6 +1414,7 @@ impl crate::backend::Backend for StarkbotEngine {
             flows_dir: self.app_config.flows_dir().display().to_string(),
             inference_configured: !self.api_key.is_empty(),
             integrations: self.integrations.clone(),
+            extension_server: self.app_config.settings().extension_server.clone(),
         }
     }
 

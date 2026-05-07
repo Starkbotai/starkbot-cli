@@ -8,6 +8,7 @@ export default function ApiKeysView({
   onInstall,
   onUninstall,
   onImportFlow,
+  onNavigatePacks,
 }: {
   snapshot: AppSnapshot | null;
   onAdd: (name: string, key: string) => Promise<void>;
@@ -15,6 +16,7 @@ export default function ApiKeysView({
   onInstall: (presetId: string, apiKeys: [string, string][]) => Promise<void>;
   onUninstall: (presetId: string) => Promise<void>;
   onImportFlow: (presetId: string) => Promise<void>;
+  onNavigatePacks?: () => void;
 }) {
   const integrations = snapshot?.integrations ?? [];
   const keys = snapshot?.api_keys ?? [];
@@ -71,14 +73,24 @@ export default function ApiKeysView({
       {/* Header */}
       <div className="flex items-center justify-between mb-5">
         <h2 className="text-lg font-semibold text-white">Integrations</h2>
-        {available.length > 0 && (
-          <button
-            onClick={() => { setAdding(!adding); setSelectedPreset(null); setKeyInputs({}); }}
-            className="px-3 py-1.5 bg-accent hover:bg-accent-dim text-white text-sm rounded transition-colors"
-          >
-            {adding ? "Cancel" : "+ Add Integration"}
-          </button>
-        )}
+        <div className="flex gap-2">
+          {onNavigatePacks && (
+            <button
+              onClick={onNavigatePacks}
+              className="px-3 py-1.5 text-sm text-accent hover:bg-accent/10 rounded transition-colors border border-accent/30"
+            >
+              Find more integrations
+            </button>
+          )}
+          {available.length > 0 && (
+            <button
+              onClick={() => { setAdding(!adding); setSelectedPreset(null); setKeyInputs({}); }}
+              className="px-3 py-1.5 bg-accent hover:bg-accent-dim text-white text-sm rounded transition-colors"
+            >
+              {adding ? "Cancel" : "+ Add Integration"}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Add integration flow */}

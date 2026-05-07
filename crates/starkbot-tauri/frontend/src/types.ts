@@ -177,6 +177,7 @@ export interface AppSnapshot {
   flows_dir: string;
   inference_configured: boolean;
   integrations: IntegrationPresetInfo[];
+  extension_server: string;
 }
 
 // BackendEvent variants (comes as JSON string from Tauri)

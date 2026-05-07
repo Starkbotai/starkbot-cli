@@ -82,6 +82,10 @@ impl AppConfig {
         self.root.join("packs")
     }
 
+    pub fn settings(&self) -> settings::Settings {
+        settings::Settings::load(&self.settings_path()).unwrap_or_default()
+    }
+
     pub fn integrations_path(&self) -> PathBuf {
         self.root.join("integrations.json")
     }

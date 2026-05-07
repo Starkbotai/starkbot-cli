@@ -95,17 +95,19 @@ pub struct PendingApproval {
 #[derive(Clone, Copy, PartialEq)]
 pub enum SettingsSection {
     AgentModel,
+    ExtensionServer,
 }
 
 impl SettingsSection {
     pub fn label(&self) -> &'static str {
         match self {
             Self::AgentModel => "Agent Model",
+            Self::ExtensionServer => "Extensions",
         }
     }
 
     pub fn all() -> &'static [SettingsSection] {
-        &[SettingsSection::AgentModel]
+        &[SettingsSection::AgentModel, SettingsSection::ExtensionServer]
     }
 }
 
@@ -189,6 +191,7 @@ pub struct TuiState {
     pub packs_search: String,
     pub packs_loading: bool,
     pub packs_message: Option<String>,
+    pub extension_server: String,
 }
 
 impl TuiState {
@@ -245,6 +248,7 @@ impl TuiState {
             packs_search: String::new(),
             packs_loading: false,
             packs_message: None,
+            extension_server: "https://hyperpacks.org".to_string(),
         }
     }
 
@@ -347,6 +351,7 @@ impl TuiState {
             packs_search: String::new(),
             packs_loading: false,
             packs_message: None,
+            extension_server: snapshot.extension_server.clone(),
         }
     }
 
@@ -667,6 +672,10 @@ fn handle_api_keys_key(state: &mut TuiState, key: KeyEvent) -> Option<FrontendCo
                         return Some(FrontendCommand::ApiKeyDelete { name });
                     }
                 }
+                KeyCode::Char('p') => {
+                    state.active_view = ActiveView::Packs;
+                    return Some(FrontendCommand::PacksList);
+                }
                 _ => {}
             }
         }
@@ -902,17 +911,27 @@ fn handle_settings_key(state: &mut TuiState, key: KeyEvent) -> Option<FrontendCo
         }
         KeyCode::Up | KeyCode::Char('k') => {
             if state.settings_focus == SettingsFocus::Content {
-                state.selected_model = state.selected_model.saturating_sub(1);
+                if state.settings_section == SettingsSection::AgentModel {
+                    state.selected_model = state.selected_model.saturating_sub(1);
+                }
+            } else {
+                let sections = SettingsSection::all();
+                if let Some(idx) = sections.iter().position(|s| *s == state.settings_section) {
+                    if idx > 0 { state.settings_section = sections[idx - 1]; }
+                }
             }
-            // Sidebar: only one section for now, no-op
         }
         KeyCode::Down | KeyCode::Char('j') => {
             if state.settings_focus == SettingsFocus::Content {
-                if !state.available_models.is_empty() {
+                if state.settings_section == SettingsSection::AgentModel && !state.available_models.is_empty() {
                     state.selected_model = (state.selected_model + 1).min(state.available_models.len() - 1);
                 }
+            } else {
+                let sections = SettingsSection::all();
+                if let Some(idx) = sections.iter().position(|s| *s == state.settings_section) {
+                    if idx + 1 < sections.len() { state.settings_section = sections[idx + 1]; }
+                }
             }
-            // Sidebar: only one section for now, no-op
         }
         KeyCode::Enter => {
             if state.settings_focus == SettingsFocus::Content {
@@ -1560,6 +1579,7 @@ fn draw_api_keys(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
             detail_lines.push(Line::from("   a - Add new key"));
             detail_lines.push(Line::from("   d - Delete selected key"));
             detail_lines.push(Line::from("   j/k - Navigate"));
+            detail_lines.push(Line::from("   p - Find more integrations"));
             detail_lines.push(Line::from("   Tab - Switch view"));
         }
         ApiKeyInputMode::EnteringName => {
@@ -1773,53 +1793,77 @@ fn draw_settings(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
             .border_style(Style::default().fg(sidebar_border)));
     frame.render_widget(sidebar, chunks[0]);
 
-    // Model list
+    // Content area
     let content_focused = state.settings_focus == SettingsFocus::Content;
-    let items: Vec<Line> = state.available_models.iter().enumerate().map(|(i, model)| {
-        let is_current = *model == state.model_name;
-        let is_selected = i == state.selected_model;
-        let style = if is_selected && content_focused {
-            Style::default().fg(Color::Cyan).bold()
-        } else if is_current {
-            Style::default().fg(Color::Green)
-        } else {
-            Style::default()
-        };
-        let marker = if is_selected && content_focused { "▸ " } else { "  " };
-        let current_tag = if is_current { " (active)" } else { "" };
-        Line::from(Span::styled(format!("{}{}{}", marker, model, current_tag), style))
-    }).collect();
     let list_border = if content_focused { Color::Cyan } else { Color::DarkGray };
-    let list = Paragraph::new(items)
-        .block(Block::default().borders(Borders::ALL).title(" Models ")
-            .border_style(Style::default().fg(list_border)));
-    frame.render_widget(list, chunks[1]);
 
-    // Detail
-    let mut detail_lines: Vec<Line> = vec![];
-    if state.selected_model < state.available_models.len() {
-        let model = &state.available_models[state.selected_model];
-        detail_lines.push(Line::from(Span::styled(
-            format!(" Model: {}", model), Style::default().fg(Color::White).bold(),
-        )));
-        detail_lines.push(Line::from(""));
-        let desc = match model.as_str() {
-            "gpt-5.4" => "Default model. Good balance of speed and capability.",
-            "gpt-5.4-mini" => "Faster and cheaper. Best for simple tasks.",
-            "gpt-5.5" => "Most capable. Best for complex reasoning.",
-            _ => "",
-        };
-        detail_lines.push(Line::from(Span::styled(format!(" {}", desc), Style::default().fg(Color::DarkGray))));
-        detail_lines.push(Line::from(""));
+    match state.settings_section {
+        SettingsSection::AgentModel => {
+            let items: Vec<Line> = state.available_models.iter().enumerate().map(|(i, model)| {
+                let is_current = *model == state.model_name;
+                let is_selected = i == state.selected_model;
+                let style = if is_selected && content_focused {
+                    Style::default().fg(Color::Cyan).bold()
+                } else if is_current {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default()
+                };
+                let marker = if is_selected && content_focused { "▸ " } else { "  " };
+                let current_tag = if is_current { " (active)" } else { "" };
+                Line::from(Span::styled(format!("{}{}{}", marker, model, current_tag), style))
+            }).collect();
+            let list = Paragraph::new(items)
+                .block(Block::default().borders(Borders::ALL).title(" Models ")
+                    .border_style(Style::default().fg(list_border)));
+            frame.render_widget(list, chunks[1]);
+
+            // Detail
+            let mut detail_lines: Vec<Line> = vec![];
+            if state.selected_model < state.available_models.len() {
+                let model = &state.available_models[state.selected_model];
+                detail_lines.push(Line::from(Span::styled(
+                    format!(" Model: {}", model), Style::default().fg(Color::White).bold(),
+                )));
+                detail_lines.push(Line::from(""));
+                let desc = match model.as_str() {
+                    "gpt-5.4" => "Default model. Good balance of speed and capability.",
+                    "gpt-5.4-mini" => "Faster and cheaper. Best for simple tasks.",
+                    "gpt-5.5" => "Most capable. Best for complex reasoning.",
+                    _ => "",
+                };
+                detail_lines.push(Line::from(Span::styled(format!(" {}", desc), Style::default().fg(Color::DarkGray))));
+                detail_lines.push(Line::from(""));
+            }
+            detail_lines.push(Line::from(Span::styled(" Shortcuts:", Style::default().fg(Color::Cyan))));
+            detail_lines.push(Line::from("   h/l - Switch sidebar/content"));
+            detail_lines.push(Line::from("   j/k - Navigate"));
+            detail_lines.push(Line::from("   Enter - Select model"));
+            detail_lines.push(Line::from("   Tab - Switch view"));
+
+            let detail = Paragraph::new(detail_lines)
+                .block(Block::default().borders(Borders::ALL).title(" Info "))
+                .wrap(Wrap { trim: false });
+            frame.render_widget(detail, chunks[2]);
+        }
+        SettingsSection::ExtensionServer => {
+            let mut lines: Vec<Line> = vec![];
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(" Extension Server", Style::default().fg(Color::White).bold())));
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("  URL: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(&state.extension_server, Style::default().fg(Color::Cyan)),
+            ]));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled("  Packs are fetched from this server.", Style::default().fg(Color::DarkGray))));
+            lines.push(Line::from(Span::styled("  Edit settings.toml to change.", Style::default().fg(Color::DarkGray))));
+            let content = Paragraph::new(lines)
+                .block(Block::default().borders(Borders::ALL).title(" Extension Server ")
+                    .border_style(Style::default().fg(list_border)));
+            // Merge chunks[1] and chunks[2] into one area
+            let merged = Rect::new(chunks[1].x, chunks[1].y, chunks[1].width + chunks[2].width, chunks[1].height);
+            frame.render_widget(content, merged);
+        }
     }
-    detail_lines.push(Line::from(Span::styled(" Shortcuts:", Style::default().fg(Color::Cyan))));
-    detail_lines.push(Line::from("   h/l - Switch sidebar/content"));
-    detail_lines.push(Line::from("   j/k - Navigate"));
-    detail_lines.push(Line::from("   Enter - Select model"));
-    detail_lines.push(Line::from("   Tab - Switch view"));
-
-    let detail = Paragraph::new(detail_lines)
-        .block(Block::default().borders(Borders::ALL).title(" Info "))
-        .wrap(Wrap { trim: false });
-    frame.render_widget(detail, chunks[2]);
 }

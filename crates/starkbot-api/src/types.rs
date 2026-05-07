@@ -134,4 +134,5 @@ pub struct AppSnapshot {
     pub flows_dir: String,
     pub inference_configured: bool,
     pub integrations: Vec<IntegrationPresetInfo>,
+    pub extension_server: String,
 }

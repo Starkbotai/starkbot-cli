@@ -7,7 +7,7 @@ const MODEL_DESCRIPTIONS: Record<string, string> = {
   "gpt-5.5": "Most capable. Best for complex reasoning.",
 };
 
-const SECTIONS = ["Inference"] as const;
+const SECTIONS = ["Inference", "Extensions"] as const;
 type Section = (typeof SECTIONS)[number];
 
 export default function SettingsView({
@@ -145,6 +145,15 @@ export default function SettingsView({
                 );
               })}
             </div>
+          </>
+        )}
+        {section === "Extensions" && (
+          <>
+            <h3 className="text-xs text-gray-500 uppercase mb-2">Extension Server</h3>
+            <p className="text-sm text-white mb-1">{snapshot?.extension_server || "https://hyperpacks.org"}</p>
+            <p className="text-xs text-gray-500 mb-6">
+              Packs are fetched from this server. Edit settings.toml to change.
+            </p>
           </>
         )}
       </div>
