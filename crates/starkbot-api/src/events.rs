@@ -41,6 +41,8 @@ pub enum BackendEvent {
     FlowTemplatesListed(Vec<crate::types::FlowTemplateInfo>),
     /// The integrations list was updated.
     IntegrationsUpdated(Vec<crate::types::IntegrationPresetInfo>),
+    /// Internal events log updated.
+    EventsLogUpdated(Vec<crate::types::InternalEventDto>),
 }
 
 /// Commands sent from any frontend to the engine.
@@ -88,6 +90,8 @@ pub enum FrontendCommand {
     IntegrationImportFlow { preset_id: String },
     /// List available flow templates from installed integrations.
     FlowListTemplates,
+    /// Load the internal events log.
+    EventsLogLoad,
     /// Shutdown the engine.
     Shutdown,
 }

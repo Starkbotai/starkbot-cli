@@ -1,4 +1,5 @@
 use crate::backend::{BackendConfig, BackendHandle};
+use crate::event_bus::EventBus;
 use crate::events::{BackendEvent, FrontendCommand};
 use crate::types::*;
 
@@ -20,6 +21,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::mpsc;
+use tokio::time::Instant;
 
 fn debug_log(msg: impl Into<String>) -> BackendEvent {
     let now = chrono::Local::now();
@@ -353,9 +355,319 @@ impl crate::backend::Backend for StarkbotEngine {
 
         let event_tx_clone = event_tx.clone();
 
+        // --- Event Bus ---
+        let event_bus = Arc::new(EventBus::new());
+
+        // Pulse emitter: fires every 5 seconds
+        {
+            let bus = event_bus.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    interval.tick().await;
+                    bus.emit("pulse", "");
+                }
+            });
+        }
+
+        // Scheduler worker: listens for pulse, triggers due flows
+        {
+            let bus = event_bus.clone();
+            let sched_app_config = AppConfig::open();
+            let sched_event_tx = event_tx.clone();
+            tokio::spawn(async move {
+                let mut rx = bus.subscribe();
+                let mut flow_last_run: HashMap<String, Instant> = HashMap::new();
+                loop {
+                    match rx.recv().await {
+                        Ok(evt) if evt.kind == "pulse" => {
+                            let flows = schedules::list_flows(&sched_app_config.flows_dir());
+                            let now = Instant::now();
+                            for summary in &flows {
+                                if !summary.enabled {
+                                    continue;
+                                }
+                                let Some(flow) = schedules::load_flow(&sched_app_config.flows_dir(), &summary.id) else { continue };
+                                let entry_node = flow.flow.nodes.iter().find(|n| matches!(n.node_type, schedules::FlowNodeType::Entry));
+                                let Some(entry) = entry_node else { continue };
+
+                                let schedule_type = entry.data.get("schedule_type")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("minutes");
+                                let interval_val = entry.data.get("interval")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or(5);
+                                let interval_secs = match schedule_type {
+                                    "hours" => interval_val * 3600,
+                                    _ => interval_val * 60,
+                                };
+
+                                let should_run = match flow_last_run.get(&summary.id) {
+                                    Some(last) => now.duration_since(*last).as_secs() >= interval_secs,
+                                    None => true,
+                                };
+
+                                if should_run {
+                                    flow_last_run.insert(summary.id.clone(), now);
+                                    log::info!("[scheduler] Triggering flow '{}' (every {} {})", summary.name, interval_val, schedule_type);
+                                    let _ = sched_event_tx.send(debug_log(format!("Scheduler: triggering flow '{}'", summary.name)));
+                                    bus.emit("run_flow", &summary.id);
+                                }
+                            }
+                        }
+                        Ok(_) => {} // ignore non-pulse events
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            log::warn!("[scheduler] Lagged {} events", n);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
+        }
+
+        // Flow executor worker: listens for run_flow events
+        {
+            let bus = event_bus.clone();
+            let exec_persona = self.persona.clone();
+            let exec_skills_dir = self.skills_dir.clone();
+            let exec_cwd = self.cwd.clone();
+            let exec_api_key = self.api_key.clone();
+            let exec_model_name = self.model_name.clone();
+            let exec_app_config = AppConfig::open();
+            let exec_event_tx = event_tx.clone();
+            let exec_persona_name = persona.name().to_string();
+            let exec_flow_running = flow_running_count.clone();
+            tokio::spawn(async move {
+                let mut rx = bus.subscribe();
+                loop {
+                    match rx.recv().await {
+                        Ok(evt) if evt.kind == "run_flow" => {
+                            let flow_id = evt.payload.clone();
+                            let Some(flow) = schedules::load_flow(&exec_app_config.flows_dir(), &flow_id) else {
+                                let _ = exec_event_tx.send(BackendEvent::Error { message: format!("Flow '{}' not found", flow_id) });
+                                continue;
+                            };
+
+                            let run_id = uuid::Uuid::new_v4().to_string();
+                            schedules::append_flow_log(&exec_app_config.flow_logs_path(), &FlowLogEntry {
+                                timestamp: chrono::Local::now().to_rfc3339(),
+                                flow_id: flow.id.clone(),
+                                flow_name: flow.name.clone(),
+                                action: "run_once".to_string(),
+                                detail: String::new(),
+                                run_id: Some(run_id.clone()),
+                            });
+
+                            let prompts = schedules::walk_flow_prompts(&flow.flow);
+                            if prompts.is_empty() {
+                                let _ = exec_event_tx.send(BackendEvent::Error { message: format!("Flow '{}' has no prompt nodes", flow.name) });
+                                bus.emit("flow_error", &format!("{}|no prompt nodes", flow.id));
+                                continue;
+                            }
+
+                            if exec_api_key.is_empty() {
+                                let _ = exec_event_tx.send(BackendEvent::Error { message: "Flow execution requires an API key.".to_string() });
+                                bus.emit("flow_error", &format!("{}|no API key", flow.id));
+                                continue;
+                            }
+
+                            log::info!("[flow-executor] Starting flow '{}' with {} prompt(s)", flow.name, prompts.len());
+
+                            let flow_event_tx = exec_event_tx.clone();
+                            let flow_persona = exec_persona.clone();
+                            let flow_skills_dir = exec_skills_dir.clone();
+                            let flow_cwd = exec_cwd.clone();
+                            let flow_api_key = exec_api_key.clone();
+                            let flow_model_name = exec_model_name.clone();
+                            let flow_app_config = AppConfig::open();
+                            let flow_name = flow.name.clone();
+                            let flow_id_clone = flow.id.clone();
+                            let flow_persona_name = exec_persona_name.clone();
+                            let keys_path = exec_app_config.keys_path();
+                            let flow_run_id = run_id.clone();
+                            let flow_running = exec_flow_running.clone();
+                            let bus_clone = bus.clone();
+
+                            let prev = flow_running.fetch_add(1, Ordering::SeqCst);
+                            let _ = exec_event_tx.send(BackendEvent::FlowRunningCount { count: prev + 1 });
+
+                            tokio::spawn(async move {
+                                let runner = match AgentRunner::build_for_tui(
+                                    &flow_persona,
+                                    &flow_skills_dir,
+                                    &flow_cwd,
+                                    &flow_api_key,
+                                    &flow_model_name,
+                                    ApprovalMode::AutoApprove,
+                                    Some(keys_path),
+                                ) {
+                                    Ok(r) => r,
+                                    Err(e) => {
+                                        log::error!("[flow-executor] Failed to build runner: {}", e);
+                                        bus_clone.emit("flow_error", &format!("{}|{}", flow_id_clone, e));
+                                        let prev = flow_running.fetch_sub(1, Ordering::SeqCst);
+                                        let _ = flow_event_tx.send(BackendEvent::FlowRunningCount { count: prev - 1 });
+                                        return;
+                                    }
+                                };
+
+                                let mut session_messages: Vec<ChatSessionMessage> = Vec::new();
+                                let mut all_succeeded = true;
+                                let mut last_error: Option<String> = None;
+
+                                for prompt_text in &prompts {
+                                    session_messages.push(ChatSessionMessage {
+                                        role: "user".to_string(),
+                                        content: prompt_text.clone(),
+                                    });
+
+                                    let autonomous_prompt = format!(
+                                        "[AUTONOMOUS MODE] You are executing a flow step. \
+                                         You cannot ask the user follow-up questions — you must \
+                                         do your best with the information given. Use your tools \
+                                         to research and gather any missing information. \
+                                         Produce a complete answer.\n\n{}", prompt_text
+                                    );
+                                    let turn_state = AgentState::new(&autonomous_prompt);
+
+                                    let (atx, mut arx) = mpsc::unbounded_channel::<BackendEvent>();
+                                    let emitting_sg = build_emitting_guard(runner.step_guard.clone(), atx.clone());
+                                    let rg = runner.graph.clone();
+
+                                    let (result_tx, result_rx) = tokio::sync::oneshot::channel::<Result<AgentState, String>>();
+
+                                    tokio::spawn(async move {
+                                        let executor = metalcraft::Executor::new_from_arc(rg)
+                                            .max_steps(100)
+                                            .with_step_guard(emitting_sg);
+
+                                        let result = tokio::time::timeout(
+                                            std::time::Duration::from_secs(120),
+                                            executor.run(turn_state, "agent"),
+                                        ).await;
+
+                                        match result {
+                                            Ok(Ok(RunOutcome::Completed(state))) => {
+                                                let answer = state.final_answer().unwrap_or("(no answer)").to_string();
+                                                let _ = atx.send(BackendEvent::TurnComplete { answer });
+                                                let _ = result_tx.send(Ok(state));
+                                            }
+                                            Ok(Ok(RunOutcome::Interrupted { reason, .. })) => {
+                                                let _ = atx.send(BackendEvent::Error { message: format!("Interrupted: {}", reason) });
+                                                let _ = result_tx.send(Err(format!("Interrupted: {}", reason)));
+                                            }
+                                            Ok(Err(e)) => {
+                                                let _ = atx.send(BackendEvent::Error { message: format!("Error: {}", e) });
+                                                let _ = result_tx.send(Err(format!("{}", e)));
+                                            }
+                                            Err(_) => {
+                                                let _ = atx.send(BackendEvent::Error { message: "Flow prompt timed out after 120s".to_string() });
+                                                let _ = result_tx.send(Err("Timeout".to_string()));
+                                            }
+                                        }
+                                    });
+
+                                    let fwd_handle = tokio::spawn(async move {
+                                        while arx.recv().await.is_some() {}
+                                    });
+
+                                    match result_rx.await {
+                                        Ok(Ok(state)) => {
+                                            let answer = state.final_answer().unwrap_or("(no answer)").to_string();
+                                            session_messages.push(ChatSessionMessage {
+                                                role: "assistant".to_string(),
+                                                content: answer,
+                                            });
+                                        }
+                                        Ok(Err(err)) => {
+                                            session_messages.push(ChatSessionMessage {
+                                                role: "error".to_string(),
+                                                content: err.clone(),
+                                            });
+                                            last_error = Some(err);
+                                            all_succeeded = false;
+                                            break;
+                                        }
+                                        Err(_) => {
+                                            let msg = "Internal error: result channel closed".to_string();
+                                            session_messages.push(ChatSessionMessage {
+                                                role: "error".to_string(),
+                                                content: msg.clone(),
+                                            });
+                                            last_error = Some(msg);
+                                            all_succeeded = false;
+                                            break;
+                                        }
+                                    }
+
+                                    let _ = fwd_handle.await;
+                                }
+
+                                // Save as ChatSession
+                                let session_id = uuid::Uuid::new_v4().to_string();
+                                let session = ChatSession {
+                                    id: session_id,
+                                    persona: flow_persona_name,
+                                    title: format!("Flow: {}", flow_name),
+                                    created_at: chrono::Local::now().to_rfc3339(),
+                                    messages: session_messages,
+                                };
+                                match sessions::save_session(&flow_app_config.sessions_dir(), &session) {
+                                    Ok(_) => log::info!("[flow-executor] Saved session '{}'", session.title),
+                                    Err(e) => log::error!("[flow-executor] Failed to save session: {}", e),
+                                }
+
+                                let updated_sessions = sessions::list_sessions(&flow_app_config.sessions_dir());
+                                let _ = flow_event_tx.send(BackendEvent::SessionsUpdated(updated_sessions));
+
+                                let detail = if all_succeeded {
+                                    "completed successfully".to_string()
+                                } else if let Some(ref err) = last_error {
+                                    format!("error: {}", err)
+                                } else {
+                                    "completed with errors".to_string()
+                                };
+                                schedules::append_flow_log(&flow_app_config.flow_logs_path(), &FlowLogEntry {
+                                    timestamp: chrono::Local::now().to_rfc3339(),
+                                    flow_id: flow_id_clone.clone(),
+                                    flow_name: flow_name.clone(),
+                                    action: "executed".to_string(),
+                                    detail: detail.clone(),
+                                    run_id: Some(flow_run_id),
+                                });
+
+                                let prev = flow_running.fetch_sub(1, Ordering::SeqCst);
+                                let _ = flow_event_tx.send(BackendEvent::FlowRunningCount { count: prev - 1 });
+
+                                let logs = schedules::load_flow_logs(&flow_app_config.flow_logs_path());
+                                let _ = flow_event_tx.send(BackendEvent::FlowLogsLoaded(logs));
+
+                                if all_succeeded {
+                                    bus_clone.emit("flow_completed", &flow_id_clone);
+                                } else {
+                                    bus_clone.emit("flow_error", &format!("{}|{}", flow_id_clone, detail));
+                                }
+
+                                log::info!("[flow-executor] Flow '{}' {}", flow_name, if all_succeeded { "completed" } else { "failed" });
+                            });
+                        }
+                        Ok(_) => {} // ignore non-run_flow events
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            log::warn!("[flow-executor] Lagged {} events", n);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
+        }
+
+        let event_bus_for_loop = event_bus.clone();
+
         // Spawn the main engine loop
         tokio::spawn(async move {
             let event_tx = event_tx_clone;
+            let event_bus = event_bus_for_loop;
 
             let emit = |evt: &BackendEvent| {
                 let _ = event_tx.send(evt.clone());
@@ -680,220 +992,9 @@ impl crate::backend::Backend for StarkbotEngine {
                             }
 
                             FrontendCommand::FlowRunOnce { flow_id } => {
-                                if let Some(flow) = schedules::load_flow(&app_config.flows_dir(), &flow_id) {
-                                    let run_id = uuid::Uuid::new_v4().to_string();
-                                    schedules::append_flow_log(&app_config.flow_logs_path(), &FlowLogEntry {
-                                        timestamp: chrono::Local::now().to_rfc3339(),
-                                        flow_id: flow.id.clone(),
-                                        flow_name: flow.name.clone(),
-                                        action: "run_once".to_string(),
-                                        detail: String::new(),
-                                        run_id: Some(run_id.clone()),
-                                    });
-
-                                    // Extract prompts from flow graph
-                                    let prompts = schedules::walk_flow_prompts(&flow.flow);
-                                    if prompts.is_empty() {
-                                        let _ = event_tx.send(BackendEvent::Error { message: format!("Flow '{}' has no prompt nodes", flow.name) });
-                                        continue;
-                                    }
-
-                                    // Check inference is configured
-                                    if api_key.is_empty() {
-                                        let _ = event_tx.send(BackendEvent::Error { message: "Flow execution requires an API key. Configure one in Settings > Inference.".to_string() });
-                                        continue;
-                                    }
-
-                                    log::info!("[flow] Starting flow '{}' with {} prompt(s)", flow.name, prompts.len());
-
-                                    // Clone what we need into the spawned task
-                                    let flow_event_tx = event_tx.clone();
-                                    let flow_persona = persona.clone();
-                                    let flow_skills_dir = skills_dir.clone();
-                                    let flow_cwd = cwd.clone();
-                                    let flow_api_key = api_key.clone();
-                                    let flow_model_name = model_name.clone();
-                                    let flow_app_config = AppConfig::open();
-                                    let flow_name = flow.name.clone();
-                                    let flow_id_clone = flow.id.clone();
-                                    let flow_persona_name = persona_name_for_session.clone();
-                                    let keys_path = app_config.keys_path();
-                                    let flow_run_id = run_id.clone();
-                                    let flow_running = flow_running_count.clone();
-
-                                    // Increment running count
-                                    let prev = flow_running.fetch_add(1, Ordering::SeqCst);
-                                    let _ = event_tx.send(BackendEvent::FlowRunningCount { count: prev + 1 });
-
-                                    tokio::spawn(async move {
-                                        // Build a dedicated runner with AutoApprove for flow execution
-                                        let runner = match AgentRunner::build_for_tui(
-                                            &flow_persona,
-                                            &flow_skills_dir,
-                                            &flow_cwd,
-                                            &flow_api_key,
-                                            &flow_model_name,
-                                            ApprovalMode::AutoApprove,
-                                            Some(keys_path),
-                                        ) {
-                                            Ok(r) => r,
-                                            Err(e) => {
-                                                log::error!("[flow] Failed to build flow runner: {}", e);
-                                                return;
-                                            }
-                                        };
-
-                                        let mut session_messages: Vec<ChatSessionMessage> = Vec::new();
-                                        let mut all_succeeded = true;
-                                        let mut last_error: Option<String> = None;
-
-                                        for (_i, prompt_text) in prompts.iter().enumerate() {
-
-                                            // Add user message to session
-                                            session_messages.push(ChatSessionMessage {
-                                                role: "user".to_string(),
-                                                content: prompt_text.clone(),
-                                            });
-
-                                            // Wrap prompt with autonomous directive — flow prompts
-                                            // are non-interactive so the agent must not ask questions
-                                            let autonomous_prompt = format!(
-                                                "[AUTONOMOUS MODE] You are executing a flow step. \
-                                                 You cannot ask the user follow-up questions — you must \
-                                                 do your best with the information given. Use your tools \
-                                                 to research and gather any missing information. \
-                                                 Produce a complete answer.\n\n{}", prompt_text
-                                            );
-                                            let turn_state = AgentState::new(&autonomous_prompt);
-
-                                            // Create emitting channel for real-time events
-                                            let (atx, mut arx) = mpsc::unbounded_channel::<BackendEvent>();
-                                            let emitting_sg = build_emitting_guard(runner.step_guard.clone(), atx.clone());
-
-                                            let rg = runner.graph.clone();
-
-                                            // Spawn executor
-                                            let (result_tx, result_rx) = tokio::sync::oneshot::channel::<Result<AgentState, String>>();
-
-                                            tokio::spawn(async move {
-                                                let executor = metalcraft::Executor::new_from_arc(rg)
-                                                    .max_steps(100)
-                                                    .with_step_guard(emitting_sg);
-
-                                                let result = tokio::time::timeout(
-                                                    std::time::Duration::from_secs(120),
-                                                    executor.run(turn_state, "agent"),
-                                                ).await;
-
-                                                match result {
-                                                    Ok(Ok(RunOutcome::Completed(state))) => {
-                                                        let answer = state.final_answer().unwrap_or("(no answer)").to_string();
-                                                        let _ = atx.send(BackendEvent::TurnComplete { answer });
-                                                        let _ = result_tx.send(Ok(state));
-                                                    }
-                                                    Ok(Ok(RunOutcome::Interrupted { reason, .. })) => {
-                                                        let _ = atx.send(BackendEvent::Error { message: format!("Interrupted: {}", reason) });
-                                                        let _ = result_tx.send(Err(format!("Interrupted: {}", reason)));
-                                                    }
-                                                    Ok(Err(e)) => {
-                                                        let _ = atx.send(BackendEvent::Error { message: format!("Error: {}", e) });
-                                                        let _ = result_tx.send(Err(format!("{}", e)));
-                                                    }
-                                                    Err(_) => {
-                                                        let _ = atx.send(BackendEvent::Error { message: "Flow prompt timed out after 120s".to_string() });
-                                                        let _ = result_tx.send(Err("Timeout".to_string()));
-                                                    }
-                                                }
-                                            });
-
-                                            // Drain events without forwarding to chat pane —
-                                            // flow results are saved to session, not shown in chat
-                                            let fwd_handle = tokio::spawn(async move {
-                                                while arx.recv().await.is_some() {}
-                                            });
-
-                                            // Wait for executor result
-                                            match result_rx.await {
-                                                Ok(Ok(state)) => {
-                                                    let answer = state.final_answer().unwrap_or("(no answer)").to_string();
-                                                    session_messages.push(ChatSessionMessage {
-                                                        role: "assistant".to_string(),
-                                                        content: answer,
-                                                    });
-                                                }
-                                                Ok(Err(err)) => {
-                                                    session_messages.push(ChatSessionMessage {
-                                                        role: "error".to_string(),
-                                                        content: err.clone(),
-                                                    });
-                                                    last_error = Some(err);
-                                                    all_succeeded = false;
-                                                    break;
-                                                }
-                                                Err(_) => {
-                                                    let msg = "Internal error: result channel closed".to_string();
-                                                    session_messages.push(ChatSessionMessage {
-                                                        role: "error".to_string(),
-                                                        content: msg.clone(),
-                                                    });
-                                                    last_error = Some(msg);
-                                                    all_succeeded = false;
-                                                    break;
-                                                }
-                                            }
-
-                                            // Ensure forwarder finishes
-                                            let _ = fwd_handle.await;
-                                        }
-
-                                        // Save as a ChatSession
-                                        let session_id = uuid::Uuid::new_v4().to_string();
-                                        let session = ChatSession {
-                                            id: session_id,
-                                            persona: flow_persona_name,
-                                            title: format!("Flow: {}", flow_name),
-                                            created_at: chrono::Local::now().to_rfc3339(),
-                                            messages: session_messages,
-                                        };
-                                        match sessions::save_session(&flow_app_config.sessions_dir(), &session) {
-                                            Ok(_) => log::info!("[flow] Saved session '{}' with {} messages", session.title, session.messages.len()),
-                                            Err(e) => log::error!("[flow] Failed to save flow session: {}", e),
-                                        }
-
-                                        // Emit sessions updated
-                                        let updated_sessions = sessions::list_sessions(&flow_app_config.sessions_dir());
-                                        let _ = flow_event_tx.send(BackendEvent::SessionsUpdated(updated_sessions));
-
-                                        // Log result
-                                        let detail = if all_succeeded {
-                                            "completed successfully".to_string()
-                                        } else if let Some(ref err) = last_error {
-                                            format!("error: {}", err)
-                                        } else {
-                                            "completed with errors".to_string()
-                                        };
-                                        schedules::append_flow_log(&flow_app_config.flow_logs_path(), &FlowLogEntry {
-                                            timestamp: chrono::Local::now().to_rfc3339(),
-                                            flow_id: flow_id_clone,
-                                            flow_name: flow_name.clone(),
-                                            action: "executed".to_string(),
-                                            detail,
-                                            run_id: Some(flow_run_id),
-                                        });
-
-                                        // Decrement running count
-                                        let prev = flow_running.fetch_sub(1, Ordering::SeqCst);
-                                        let _ = flow_event_tx.send(BackendEvent::FlowRunningCount { count: prev - 1 });
-
-                                        // Update flow logs in UI
-                                        let logs = schedules::load_flow_logs(&flow_app_config.flow_logs_path());
-                                        let _ = flow_event_tx.send(BackendEvent::FlowLogsLoaded(logs));
-
-                                        log::info!("[flow] Flow '{}' {}", flow_name, if all_succeeded { "completed" } else { "completed with errors" });
-                                    });
-                                } else {
-                                    let _ = event_tx.send(BackendEvent::Error { message: format!("Flow '{}' not found", flow_id) });
-                                }
+                                log::info!("[engine] FlowRunOnce -> emitting run_flow:{}", flow_id);
+                                let _ = event_tx.send(debug_log(format!("FlowRunOnce: emitting run_flow for {}", flow_id)));
+                                event_bus.emit("run_flow", &flow_id);
                             }
 
                             FrontendCommand::FlowLogsLoad => {
@@ -904,6 +1005,17 @@ impl crate::backend::Backend for StarkbotEngine {
                             FrontendCommand::FlowList => {
                                 let flows = schedules::list_flows(&app_config.flows_dir());
                                 let _ = event_tx.send(BackendEvent::FlowsListed(flows));
+                            }
+
+                            FrontendCommand::EventsLogLoad => {
+                                let events: Vec<InternalEventDto> = event_bus.recent_events().into_iter().map(|e| {
+                                    InternalEventDto {
+                                        timestamp: e.timestamp,
+                                        kind: e.kind,
+                                        payload: e.payload,
+                                    }
+                                }).collect();
+                                let _ = event_tx.send(BackendEvent::EventsLogUpdated(events));
                             }
 
                             FrontendCommand::IntegrationInstall { preset_id, api_keys: install_keys } => {

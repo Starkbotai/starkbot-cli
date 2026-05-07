@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
-import type { SessionSummary, ChatSession, FlowLogEntry, CustomFileEntry } from "../types";
+import type { SessionSummary, ChatSession, FlowLogEntry, CustomFileEntry, InternalEvent } from "../types";
 
-type DataTab = "sessions" | "flow-logs" | "custom";
+type DataTab = "sessions" | "flow-logs" | "events" | "custom";
 
 interface Props {
   sessions: SessionSummary[];
@@ -11,6 +11,8 @@ interface Props {
   onDeleteSession: (id: string) => void;
   onResumeSession: (id: string) => void;
   onLoadFlowLogs: () => void;
+  internalEvents: InternalEvent[];
+  onLoadEventsLog: () => void;
   onListCustomFiles: () => Promise<CustomFileEntry[]>;
   onReadCustomFile: (path: string) => Promise<string>;
   onWriteCustomFile: (path: string, content: string) => Promise<void>;
@@ -24,6 +26,8 @@ export default function DataView({
   onDeleteSession,
   onResumeSession,
   onLoadFlowLogs,
+  internalEvents,
+  onLoadEventsLog,
   onListCustomFiles,
   onReadCustomFile,
   onWriteCustomFile,
@@ -34,6 +38,8 @@ export default function DataView({
   useEffect(() => {
     if (tab === "flow-logs") {
       onLoadFlowLogs();
+    } else if (tab === "events") {
+      onLoadEventsLog();
     }
   }, [tab]);
 
@@ -56,6 +62,14 @@ export default function DataView({
           }`}
         >
           Flow Logs
+        </button>
+        <button
+          onClick={() => setTab("events")}
+          className={`w-full text-left px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+            tab === "events" ? "bg-accent/20 text-accent" : "text-gray-400 hover:text-gray-200 hover:bg-surface-2"
+          }`}
+        >
+          Events
         </button>
         <button
           onClick={() => setTab("custom")}
@@ -145,12 +159,69 @@ export default function DataView({
         <FlowLogsPanel flowLogs={flowLogs} onLoadFlowLogs={onLoadFlowLogs} />
       )}
 
+      {tab === "events" && (
+        <EventsLogPanel events={internalEvents} onRefresh={onLoadEventsLog} />
+      )}
+
       {tab === "custom" && (
         <CustomFilesPanel
           onListFiles={onListCustomFiles}
           onReadFile={onReadCustomFile}
           onWriteFile={onWriteCustomFile}
         />
+      )}
+    </div>
+  );
+}
+
+// --- Events Log Panel ---
+
+function EventsLogPanel({ events, onRefresh }: { events: InternalEvent[]; onRefresh: () => void }) {
+  // Show newest first
+  const reversed = useMemo(() => [...events].reverse(), [events]);
+
+  const kindColor = (kind: string) => {
+    switch (kind) {
+      case "pulse": return "bg-gray-800 text-gray-500";
+      case "run_flow": return "bg-blue-900/40 text-blue-400";
+      case "flow_completed": return "bg-green-900/40 text-green-400";
+      case "flow_error": return "bg-red-900/40 text-red-400";
+      default: return "bg-gray-800 text-gray-400";
+    }
+  };
+
+  return (
+    <div className="flex-1 overflow-y-auto p-4">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-semibold text-gray-200">Events Log</h2>
+        <button
+          onClick={onRefresh}
+          className="px-2 py-1 text-xs rounded text-gray-400 hover:text-gray-200 hover:bg-surface-2"
+        >
+          Refresh
+        </button>
+      </div>
+      {reversed.length === 0 ? (
+        <div className="text-sm text-gray-500">No events recorded yet. Events appear as the engine runs.</div>
+      ) : (
+        <div className="space-y-1">
+          {reversed.map((evt, i) => (
+            <div
+              key={i}
+              className="flex items-center gap-3 px-3 py-1.5 rounded border border-surface-3 bg-surface-1 text-sm"
+            >
+              <span className="text-[10px] text-gray-500 font-mono whitespace-nowrap">
+                {evt.timestamp.slice(11, 19)}
+              </span>
+              <span className={`px-1.5 py-0.5 text-[10px] rounded font-medium ${kindColor(evt.kind)}`}>
+                {evt.kind}
+              </span>
+              {evt.payload && (
+                <span className="text-gray-400 text-xs truncate">{evt.payload}</span>
+              )}
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

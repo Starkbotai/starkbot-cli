@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import type { AppSnapshot, BackendEvent, ChatMessage, ChatSession, SessionSummary, SavedFlow, FlowSummary, FlowLogEntry, FlowTemplateInfo, CustomFileEntry } from "../types";
+import type { AppSnapshot, BackendEvent, ChatMessage, ChatSession, SessionSummary, SavedFlow, FlowSummary, FlowLogEntry, FlowTemplateInfo, CustomFileEntry, InternalEvent } from "../types";
 
 interface PendingApproval {
   request_id: string;
@@ -33,6 +33,7 @@ interface BackendState {
   inferenceConfigured: boolean;
   runningFlows: number;
   flowTemplates: FlowTemplateInfo[];
+  internalEvents: InternalEvent[];
 }
 
 export function useBackend() {
@@ -54,6 +55,7 @@ export function useBackend() {
     inferenceConfigured: false,
     runningFlows: 0,
     flowTemplates: [],
+    internalEvents: [],
   });
 
   const messagesRef = useRef(state.messages);
@@ -205,6 +207,9 @@ export function useBackend() {
       if ("FlowTemplatesListed" in evt) {
         return { ...prev, flowTemplates: evt.FlowTemplatesListed };
       }
+      if ("EventsLogUpdated" in evt) {
+        return { ...prev, internalEvents: evt.EventsLogUpdated };
+      }
       if ("IntegrationsUpdated" in evt) {
         const updatedSnapshot = prev.snapshot
           ? { ...prev.snapshot, integrations: evt.IntegrationsUpdated }
@@ -314,6 +319,10 @@ export function useBackend() {
     await invoke("flow_logs_load");
   }, []);
 
+  const loadEventsLog = useCallback(async () => {
+    await invoke("events_log_load");
+  }, []);
+
   const slashCommand = useCallback(async (command: string) => {
     // Optimistically clear local state for /clear and /new
     if (command === "/clear" || command === "/new") {
@@ -374,6 +383,7 @@ export function useBackend() {
     toggleFlowEnabled,
     runFlowOnce,
     loadFlowLogs,
+    loadEventsLog,
     slashCommand,
     clearMessages,
     clearEditingFlow,

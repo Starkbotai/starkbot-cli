@@ -137,6 +137,12 @@ export interface FlowTemplateInfo {
   template_name: string;
 }
 
+export interface InternalEvent {
+  timestamp: string;
+  kind: string;
+  payload: string;
+}
+
 export interface CustomFileEntry {
   path: string;
   name: string;
@@ -185,4 +191,5 @@ export type BackendEvent =
   | { FlowLogsLoaded: FlowLogEntry[] }
   | { FlowRunningCount: { count: number } }
   | { FlowTemplatesListed: FlowTemplateInfo[] }
-  | { IntegrationsUpdated: IntegrationPresetInfo[] };
+  | { IntegrationsUpdated: IntegrationPresetInfo[] }
+  | { EventsLogUpdated: InternalEvent[] };

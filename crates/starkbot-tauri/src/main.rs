@@ -96,6 +96,13 @@ async fn flow_logs_load(state: tauri::State<'_, Arc<AppState>>) -> Result<(), St
         .map_err(|e| format!("Failed to send: {}", e))
 }
 
+/// Tauri command: load internal events log.
+#[tauri::command]
+async fn events_log_load(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::EventsLogLoad)
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
 /// Tauri command: run a flow once immediately.
 #[tauri::command]
 async fn flow_run_once(flow_id: String, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
@@ -369,6 +376,7 @@ fn main() {
             flow_run_once,
             flow_toggle_enabled,
             flow_logs_load,
+            events_log_load,
             integration_install,
             integration_uninstall,
             integration_import_flow,

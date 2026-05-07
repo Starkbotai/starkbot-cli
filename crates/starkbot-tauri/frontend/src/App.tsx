@@ -111,6 +111,8 @@ export default function App() {
               setActiveView("chat");
             }}
             onLoadFlowLogs={backend.loadFlowLogs}
+            internalEvents={backend.internalEvents}
+            onLoadEventsLog={backend.loadEventsLog}
             onListCustomFiles={backend.listCustomFiles}
             onReadCustomFile={backend.readCustomFile}
             onWriteCustomFile={backend.writeCustomFile}

@@ -94,6 +94,14 @@ pub struct FlowTemplateInfo {
     pub template_name: String,
 }
 
+/// A DTO for internal event bus events.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InternalEventDto {
+    pub timestamp: String,
+    pub kind: String,
+    pub payload: String,
+}
+
 /// Full application state snapshot for frontends.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSnapshot {
