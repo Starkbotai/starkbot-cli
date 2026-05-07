@@ -31,7 +31,8 @@ impl EventBus {
             kind: kind.to_string(),
             payload: payload.to_string(),
         };
-        {
+        // Don't log high-frequency pulse events — they'd drown out useful entries
+        if kind != "pulse" {
             let mut log = self.log.lock().unwrap();
             if log.len() >= 200 {
                 log.pop_front();

@@ -16,10 +16,10 @@ use starkbot_config::schedules;
 use starkbot_config::integrations;
 use starkbot_config::AppConfig;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 
@@ -357,15 +357,22 @@ impl crate::backend::Backend for StarkbotEngine {
 
         // --- Event Bus ---
         let event_bus = Arc::new(EventBus::new());
+        let shutdown_flag = Arc::new(AtomicBool::new(false));
+
+        // Shared mutable config so workers see API key / model changes
+        let shared_api_key = Arc::new(Mutex::new(self.api_key.clone()));
+        let shared_model_name = Arc::new(Mutex::new(self.model_name.clone()));
 
         // Pulse emitter: fires every 5 seconds
         {
             let bus = event_bus.clone();
+            let shutdown = shutdown_flag.clone();
             tokio::spawn(async move {
                 let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 loop {
                     interval.tick().await;
+                    if shutdown.load(Ordering::Relaxed) { break; }
                     bus.emit("pulse", "");
                 }
             });
@@ -376,10 +383,14 @@ impl crate::backend::Backend for StarkbotEngine {
             let bus = event_bus.clone();
             let sched_app_config = AppConfig::open();
             let sched_event_tx = event_tx.clone();
+            let shutdown = shutdown_flag.clone();
             tokio::spawn(async move {
                 let mut rx = bus.subscribe();
+                // Seed last-run to now so flows don't all fire immediately on startup
                 let mut flow_last_run: HashMap<String, Instant> = HashMap::new();
+                let boot = Instant::now();
                 loop {
+                    if shutdown.load(Ordering::Relaxed) { break; }
                     match rx.recv().await {
                         Ok(evt) if evt.kind == "pulse" => {
                             let flows = schedules::list_flows(&sched_app_config.flows_dir());
@@ -403,20 +414,19 @@ impl crate::backend::Backend for StarkbotEngine {
                                     _ => interval_val * 60,
                                 };
 
-                                let should_run = match flow_last_run.get(&summary.id) {
-                                    Some(last) => now.duration_since(*last).as_secs() >= interval_secs,
-                                    None => true,
-                                };
+                                // First time seeing this flow: seed to boot time so it waits one full interval
+                                let last = flow_last_run.entry(summary.id.clone()).or_insert(boot);
+                                let should_run = now.duration_since(*last).as_secs() >= interval_secs;
 
                                 if should_run {
-                                    flow_last_run.insert(summary.id.clone(), now);
+                                    *last = now;
                                     log::info!("[scheduler] Triggering flow '{}' (every {} {})", summary.name, interval_val, schedule_type);
                                     let _ = sched_event_tx.send(debug_log(format!("Scheduler: triggering flow '{}'", summary.name)));
                                     bus.emit("run_flow", &summary.id);
                                 }
                             }
                         }
-                        Ok(_) => {} // ignore non-pulse events
+                        Ok(_) => {}
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                             log::warn!("[scheduler] Lagged {} events", n);
                         }
@@ -432,18 +442,31 @@ impl crate::backend::Backend for StarkbotEngine {
             let exec_persona = self.persona.clone();
             let exec_skills_dir = self.skills_dir.clone();
             let exec_cwd = self.cwd.clone();
-            let exec_api_key = self.api_key.clone();
-            let exec_model_name = self.model_name.clone();
+            let exec_shared_api_key = shared_api_key.clone();
+            let exec_shared_model_name = shared_model_name.clone();
             let exec_app_config = AppConfig::open();
             let exec_event_tx = event_tx.clone();
             let exec_persona_name = persona.name().to_string();
             let exec_flow_running = flow_running_count.clone();
+            let shutdown = shutdown_flag.clone();
+            let in_flight: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
             tokio::spawn(async move {
                 let mut rx = bus.subscribe();
                 loop {
+                    if shutdown.load(Ordering::Relaxed) { break; }
                     match rx.recv().await {
                         Ok(evt) if evt.kind == "run_flow" => {
                             let flow_id = evt.payload.clone();
+
+                            // Skip if this flow is already running
+                            {
+                                let set = in_flight.lock().unwrap();
+                                if set.contains(&flow_id) {
+                                    log::info!("[flow-executor] Flow '{}' already running, skipping", flow_id);
+                                    continue;
+                                }
+                            }
+
                             let Some(flow) = schedules::load_flow(&exec_app_config.flows_dir(), &flow_id) else {
                                 let _ = exec_event_tx.send(BackendEvent::Error { message: format!("Flow '{}' not found", flow_id) });
                                 continue;
@@ -466,7 +489,11 @@ impl crate::backend::Backend for StarkbotEngine {
                                 continue;
                             }
 
-                            if exec_api_key.is_empty() {
+                            // Read current api_key and model from shared state
+                            let current_api_key = exec_shared_api_key.lock().unwrap().clone();
+                            let current_model_name = exec_shared_model_name.lock().unwrap().clone();
+
+                            if current_api_key.is_empty() {
                                 let _ = exec_event_tx.send(BackendEvent::Error { message: "Flow execution requires an API key.".to_string() });
                                 bus.emit("flow_error", &format!("{}|no API key", flow.id));
                                 continue;
@@ -474,12 +501,15 @@ impl crate::backend::Backend for StarkbotEngine {
 
                             log::info!("[flow-executor] Starting flow '{}' with {} prompt(s)", flow.name, prompts.len());
 
+                            // Mark as in-flight
+                            in_flight.lock().unwrap().insert(flow_id.clone());
+
                             let flow_event_tx = exec_event_tx.clone();
                             let flow_persona = exec_persona.clone();
                             let flow_skills_dir = exec_skills_dir.clone();
                             let flow_cwd = exec_cwd.clone();
-                            let flow_api_key = exec_api_key.clone();
-                            let flow_model_name = exec_model_name.clone();
+                            let flow_api_key = current_api_key;
+                            let flow_model_name = current_model_name;
                             let flow_app_config = AppConfig::open();
                             let flow_name = flow.name.clone();
                             let flow_id_clone = flow.id.clone();
@@ -488,6 +518,7 @@ impl crate::backend::Backend for StarkbotEngine {
                             let flow_run_id = run_id.clone();
                             let flow_running = exec_flow_running.clone();
                             let bus_clone = bus.clone();
+                            let in_flight_clone = in_flight.clone();
 
                             let prev = flow_running.fetch_add(1, Ordering::SeqCst);
                             let _ = exec_event_tx.send(BackendEvent::FlowRunningCount { count: prev + 1 });
@@ -649,6 +680,9 @@ impl crate::backend::Backend for StarkbotEngine {
                                     bus_clone.emit("flow_error", &format!("{}|{}", flow_id_clone, detail));
                                 }
 
+                                // Remove from in-flight set
+                                in_flight_clone.lock().unwrap().remove(&flow_id_clone);
+
                                 log::info!("[flow-executor] Flow '{}' {}", flow_name, if all_succeeded { "completed" } else { "failed" });
                             });
                         }
@@ -663,11 +697,17 @@ impl crate::backend::Backend for StarkbotEngine {
         }
 
         let event_bus_for_loop = event_bus.clone();
+        let shutdown_for_loop = shutdown_flag.clone();
+        let shared_api_key_for_loop = shared_api_key.clone();
+        let shared_model_for_loop = shared_model_name.clone();
 
         // Spawn the main engine loop
         tokio::spawn(async move {
             let event_tx = event_tx_clone;
             let event_bus = event_bus_for_loop;
+            let shutdown_flag = shutdown_for_loop;
+            let shared_api_key = shared_api_key_for_loop;
+            let shared_model = shared_model_for_loop;
 
             let emit = |evt: &BackendEvent| {
                 let _ = event_tx.send(evt.clone());
@@ -820,6 +860,7 @@ impl crate::backend::Backend for StarkbotEngine {
                                         runner_graph = Some(new_runner.graph.clone());
                                         step_guard = Some(new_runner.step_guard.clone());
                                         model_name = model.clone();
+                                        *shared_model.lock().unwrap() = model_name.clone();
 
                                         if let Ok(mut s) = starkbot_config::settings::Settings::load(&app_config.settings_path()) {
                                             s.model = model.clone();
@@ -849,6 +890,7 @@ impl crate::backend::Backend for StarkbotEngine {
                                         // If this is the inference key, rebuild the runner
                                         if name == "OPENAI_API_KEY" {
                                             api_key = key.clone();
+                                            *shared_api_key.lock().unwrap() = api_key.clone();
                                             let am = if auto_approve {
                                                 ApprovalMode::AutoApprove
                                             } else {
@@ -885,6 +927,7 @@ impl crate::backend::Backend for StarkbotEngine {
 
                                         if name == "OPENAI_API_KEY" {
                                             api_key = String::new();
+                                            *shared_api_key.lock().unwrap() = String::new();
                                             runner_graph = None;
                                             step_guard = None;
                                             let msg = "Inference disabled. Configure an API key in Settings > Inference to continue.".to_string();
@@ -1140,6 +1183,7 @@ impl crate::backend::Backend for StarkbotEngine {
                             }
 
                             FrontendCommand::Shutdown => {
+                                shutdown_flag.store(true, Ordering::Relaxed);
                                 break;
                             }
 
