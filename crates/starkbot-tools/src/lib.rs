@@ -59,7 +59,17 @@ pub fn create_registry_for_with_config(
                     registry
                 }
             }
-            "web_fetch" => registry.register(web_fetch::WebFetchTool::default()),
+            "web_fetch" => {
+                if let Some(cfg) = config {
+                    if let Some(ref keys_path) = cfg.keys_path {
+                        registry.register(web_fetch::WebFetchTool::new(keys_path.clone()))
+                    } else {
+                        registry.register(web_fetch::WebFetchTool::default())
+                    }
+                } else {
+                    registry.register(web_fetch::WebFetchTool::default())
+                }
+            }
             "api_keys_check" => {
                 if let Some(cfg) = config {
                     if let Some(ref keys_path) = cfg.keys_path {

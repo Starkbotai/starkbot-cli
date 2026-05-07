@@ -1,5 +1,4 @@
 use metalcraft::{AgentMessage, AgentState, GuardAction, StepEvent, StepGuard};
-use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone)]
@@ -85,17 +84,24 @@ impl GuardTracker {
         }
 
         if self.config.loop_window > 0 {
-            let existing: HashSet<u64> = self.recent_calls.iter().copied().collect();
-            for &hash in &new_tool_calls {
-                if existing.contains(&hash) {
-                    return GuardAction::Stop("Loop detected: repeated identical tool call".into());
-                }
-            }
             self.recent_calls.extend(new_tool_calls);
             let window = self.config.loop_window;
             if self.recent_calls.len() > window {
                 let drain = self.recent_calls.len() - window;
                 self.recent_calls.drain(..drain);
+            }
+
+            // Detect loops: stop if the last N calls are all the same call
+            // (N = 3, or loop_window if smaller)
+            let repeat_threshold = 3.min(self.config.loop_window);
+            if self.recent_calls.len() >= repeat_threshold {
+                let tail = &self.recent_calls[self.recent_calls.len() - repeat_threshold..];
+                if tail.iter().all(|&h| h == tail[0]) {
+                    return GuardAction::Stop(format!(
+                        "Loop detected: same tool call repeated {} times consecutively",
+                        repeat_threshold
+                    ));
+                }
             }
         }
 

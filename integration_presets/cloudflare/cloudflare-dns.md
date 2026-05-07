@@ -1,6 +1,6 @@
 ---
 description: "Manage Cloudflare zones, DNS records, and redirect rules via the Cloudflare API"
-version: 1.0.0
+version: 1.1.0
 tags: [infrastructure, dns, cloudflare, devops]
 requires_tools: [web_fetch, api_keys_check]
 ---
@@ -23,8 +23,11 @@ If not configured, ask the user to provide it and install via `install_api_key`.
 All requests go to `https://api.cloudflare.com/client/v4/`
 
 Use `web_fetch` with:
-- `headers: {"Authorization": "Bearer <token>", "Content-Type": "application/json"}`
+- `auth: "bearer:CLOUDFLARE_API_TOKEN"` — this resolves the token from the keystore automatically
+- `headers: {"Content-Type": "application/json"}` for requests with a body
 - Appropriate `method` (GET, POST, PUT, DELETE, PATCH)
+
+**IMPORTANT**: Never manually construct Authorization headers. Always use the `auth` parameter.
 
 ## Common Operations
 

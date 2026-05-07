@@ -1,19 +1,59 @@
 use async_trait::async_trait;
 use reqwest::Client;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::time::Duration;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 const MAX_CONTENT_CHARS: usize = 50_000;
 
-#[derive(Default)]
-pub struct WebFetchTool;
+pub struct WebFetchTool {
+    keys_path: Option<PathBuf>,
+}
+
+impl Default for WebFetchTool {
+    fn default() -> Self {
+        Self { keys_path: None }
+    }
+}
+
+impl WebFetchTool {
+    pub fn new(keys_path: PathBuf) -> Self {
+        Self { keys_path: Some(keys_path) }
+    }
+
+    /// Resolve an auth spec like "bearer:CLOUDFLARE_API_TOKEN" into a header value.
+    fn resolve_auth(&self, auth: &str) -> Result<(String, String), String> {
+        let (scheme, key_name) = auth.split_once(':')
+            .ok_or_else(|| format!("Invalid auth format '{}'. Expected 'bearer:<KEY_NAME>'", auth))?;
+
+        let keys_path = self.keys_path.as_ref()
+            .ok_or_else(|| "No keystore configured — cannot resolve auth".to_string())?;
+
+        let store = starkbot_config::keys::KeyStore::load(keys_path)
+            .map_err(|e| format!("Failed to load keystore: {}", e))?;
+
+        let value = store.get(key_name)
+            .ok_or_else(|| format!("Key '{}' not found in keystore", key_name))?;
+
+        match scheme.to_lowercase().as_str() {
+            "bearer" => Ok(("Authorization".to_string(), format!("Bearer {}", value))),
+            "basic" => Ok(("Authorization".to_string(), format!("Basic {}", value))),
+            "token" => Ok(("Authorization".to_string(), format!("token {}", value))),
+            "header" => {
+                // Format: "header:KEY_NAME" sets X-API-Key style header
+                Ok(("X-API-Key".to_string(), value.to_string()))
+            }
+            other => Err(format!("Unknown auth scheme '{}'. Use bearer, basic, token, or header.", other)),
+        }
+    }
+}
 
 #[async_trait]
 impl metalcraft::Tool for WebFetchTool {
     fn name(&self) -> &str { "web_fetch" }
     fn description(&self) -> &str {
-        "Fetch content from a URL. Supports GET/POST/PUT/DELETE/PATCH with custom headers and body. Returns response as markdown (for HTML) or raw text."
+        "Fetch content from a URL. Supports GET/POST/PUT/DELETE/PATCH with custom headers and body. Use the 'auth' parameter for authenticated requests — it resolves API keys from the keystore automatically (e.g. \"bearer:CLOUDFLARE_API_TOKEN\")."
     }
     fn parameters_schema(&self) -> serde_json::Value {
         serde_json::json!({
@@ -21,11 +61,12 @@ impl metalcraft::Tool for WebFetchTool {
             "properties": {
                 "url": { "type": "string", "description": "The URL to fetch" },
                 "method": { "type": "string", "description": "HTTP method: GET, POST, PUT, DELETE, PATCH (default: GET)", "enum": ["GET", "POST", "PUT", "DELETE", "PATCH"] },
-                "headers": { "type": "string", "description": "Custom headers as a JSON string of key-value pairs (e.g. \"{\\\"Authorization\\\": \\\"Bearer ...\\\"}\")" },
+                "headers": { "type": "string", "description": "Custom headers as a JSON string of key-value pairs" },
+                "auth": { "type": "string", "description": "Auth spec that resolves a key from the keystore. Format: 'scheme:KEY_NAME'. Schemes: bearer, basic, token, header. Example: 'bearer:CLOUDFLARE_API_TOKEN'" },
                 "body": { "type": "string", "description": "Request body for POST/PUT/PATCH requests" },
                 "timeout_secs": { "type": "integer", "description": "Maximum time in seconds (default 30)" }
             },
-            "required": ["url", "method", "headers", "body", "timeout_secs"]
+            "required": ["url"]
         })
     }
     async fn call(&self, args: serde_json::Value) -> metalcraft::Result<serde_json::Value> {
@@ -64,6 +105,15 @@ impl metalcraft::Tool for WebFetchTool {
         };
         for (key, value) in &parsed_headers {
             request = request.header(key.as_str(), value.as_str());
+        }
+
+        // Resolve auth from keystore if provided
+        if let Some(auth_spec) = args["auth"].as_str() {
+            let (header_name, header_value) = self.resolve_auth(auth_spec)
+                .map_err(|e| metalcraft::GraphError::ToolCallFailed {
+                    tool: "web_fetch".into(), message: e,
+                })?;
+            request = request.header(header_name.as_str(), header_value.as_str());
         }
 
         // Apply body
