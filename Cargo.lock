@@ -7912,6 +7912,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e27ee8bb91ca0adcf0ecb116293afa12d393f9c2b9b9cd54d33e8078fe19839"
 
 [[package]]
+name = "ron"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b91f7eff05f748767f183df4320a63d6936e9c6107d97c9e6bdd9784f4289c94"
+dependencies = [
+ "base64 0.21.7",
+ "bitflags 2.11.1",
+ "serde",
+ "serde_derive",
+]
+
+[[package]]
 name = "rstar"
 version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8789,8 +8801,10 @@ dependencies = [
  "log",
  "metalcraft",
  "rig",
+ "ron",
  "serde",
  "serde_json",
+ "spice-framework",
  "starkbot-config",
  "starkbot-core",
  "starkbot-db",
@@ -8942,11 +8956,13 @@ name = "starkbot-tools"
 version = "0.1.10"
 dependencies = [
  "async-trait",
+ "chrono",
  "htmd",
  "log",
  "metalcraft",
  "reqwest 0.12.28",
  "rig",
+ "ron",
  "serde",
  "serde_json",
  "starkbot-config",

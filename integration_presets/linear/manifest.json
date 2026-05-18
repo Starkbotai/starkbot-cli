@@ -1,0 +1,9 @@
+{
+  "name": "Linear",
+  "description": "Manage Linear issues, projects, teams, and cycles via the GraphQL API",
+  "icon": "list",
+  "requires": {
+    "api_key": "LINEAR_API_KEY"
+  },
+  "skills": ["linear-manage.md"]
+}

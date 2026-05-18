@@ -1,0 +1,41 @@
+(
+    name: "Linear Integration",
+    tests: [
+        (
+            id: "linear-checks-api-key",
+            name: "Agent checks Linear API key before making requests",
+            prompt: "List my Linear teams",
+            expect_tools: Some(["api_keys_check"]),
+            expect_no_error: Some(true),
+            retries: Some(1),
+            tags: Some(["linear", "integration"]),
+        ),
+        (
+            id: "linear-loads-skill",
+            name: "Agent loads the linear-manage skill",
+            prompt: "I need to create a Linear issue for a bug I found",
+            expect_tools: Some(["load_skill"]),
+            expect_no_error: Some(true),
+            retries: Some(2),
+            tags: Some(["linear", "integration"]),
+        ),
+        (
+            id: "linear-uses-web-fetch",
+            name: "Agent uses web_fetch for Linear API calls",
+            prompt: "List all my Linear teams and their keys",
+            expect_tools: Some(["web_fetch"]),
+            expect_no_error: Some(true),
+            retries: Some(1),
+            tags: Some(["linear", "integration"]),
+        ),
+        (
+            id: "linear-no-raw-auth-header",
+            name: "Agent does not use bash for Linear API calls",
+            prompt: "Query my Linear issues assigned to me",
+            forbid_tools: Some(["bash"]),
+            expect_no_error: Some(true),
+            retries: Some(1),
+            tags: Some(["linear", "security"]),
+        ),
+    ],
+)

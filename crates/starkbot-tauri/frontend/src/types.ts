@@ -173,6 +173,39 @@ export interface ChannelSettingInfo {
   input_type: string;
 }
 
+export interface SkillTestInfo {
+  id: string;
+  name: string;
+  test_count: number;
+  content: string;
+}
+
+export interface SkillTestStep {
+  kind: string;
+  name?: string;
+  content: string;
+  success?: boolean;
+}
+
+export interface SkillTestResult {
+  suite_name: string;
+  test_id: string;
+  test_name: string;
+  passed: boolean;
+  error?: string;
+  tools_called: string[];
+  duration_ms: number;
+  final_text?: string;
+}
+
+export interface SkillTestRunReport {
+  suite_id: string;
+  results: SkillTestResult[];
+  passed: number;
+  failed: number;
+  duration_ms: number;
+}
+
 export interface AppSnapshot {
   persona_name: string;
   model_name: string;
@@ -195,6 +228,7 @@ export interface AppSnapshot {
   integrations: IntegrationPresetInfo[];
   extension_server: string;
   channels: ChannelInfo[];
+  skill_tests: SkillTestInfo[];
 }
 
 // BackendEvent variants (comes as JSON string from Tauri)
@@ -225,4 +259,8 @@ export type BackendEvent =
   | { ChannelsUpdated: ChannelInfo[] }
   | { ChannelSettingsLoaded: { channel_id: string; settings: ChannelSettingInfo[] } }
   | { GatewayMessage: { channel_id: string; channel_name: string; user_name: string; text: string } }
-  | { GatewayResponse: { channel_id: string; text: string } };
+  | { GatewayResponse: { channel_id: string; text: string } }
+  | { SkillTestsUpdated: SkillTestInfo[] }
+  | { SkillTestRunProgress: { suite_id: string; test_id: string; status: string; result?: SkillTestResult } }
+  | { SkillTestStepEvent: { suite_id: string; test_id: string; step: SkillTestStep } }
+  | { SkillTestRunComplete: SkillTestRunReport };

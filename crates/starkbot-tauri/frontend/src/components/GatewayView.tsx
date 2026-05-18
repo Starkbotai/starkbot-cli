@@ -67,6 +67,11 @@ export default function GatewayView({
     }
   };
 
+  const generateToken = () => {
+    const bytes = crypto.getRandomValues(new Uint8Array(32));
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  };
+
   return (
     <div className="flex h-full">
       {/* Left: Channel list */}
@@ -89,7 +94,7 @@ export default function GatewayView({
               className="w-full px-2 py-1 text-sm bg-surface-2 border border-surface-3 rounded text-gray-200"
             >
               {CHANNEL_TYPES.map((t) => (
-                <option key={t.value} value={t.value}>{t.label}</option>
+                <option key={t.value} value={t.value} className="bg-surface-2 text-gray-200">{t.label}</option>
               ))}
             </select>
             <input
@@ -153,7 +158,22 @@ export default function GatewayView({
               {channelSettings.map((setting) => (
                 <div key={setting.key}>
                   <label className="block text-xs text-gray-500 mb-1">{setting.label}</label>
-                  {setting.input_type === "toggle" ? (
+                  {setting.key === "auth_token" ? (
+                    <div className="flex items-center gap-2">
+                      <span className="flex-1 px-2 py-1 text-sm bg-surface-2 border border-surface-3 rounded text-gray-400 font-mono truncate">
+                        {setting.value ? "****" : "(not set)"}
+                      </span>
+                      <button
+                        onClick={() => {
+                          const token = generateToken();
+                          onUpdateSetting(selected.id, setting.key, token);
+                        }}
+                        className="px-3 py-1 text-xs rounded bg-accent text-white hover:bg-accent/80 whitespace-nowrap"
+                      >
+                        {setting.value ? "Regenerate" : "Generate"}
+                      </button>
+                    </div>
+                  ) : setting.input_type === "toggle" ? (
                     <button
                       onClick={() => {
                         const newVal = setting.value === "1" ? "0" : "1";

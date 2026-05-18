@@ -89,6 +89,23 @@ impl StarkbotEngine {
         app_config.ensure_initialized(bundled_agents.as_deref(), bundled_skills.as_deref(), bundled_presets.as_deref())
             .unwrap_or_else(|e| log::warn!("Config init failed: {}", e));
 
+        // Seed bundled skill tests
+        if let Some(bundled) = find_bundled_dir("skill_tests") {
+            let dest = app_config.skill_tests_dir();
+            let _ = std::fs::create_dir_all(&dest);
+            if let Ok(entries) = std::fs::read_dir(&bundled) {
+                for entry in entries.filter_map(|e| e.ok()) {
+                    let src = entry.path();
+                    if src.extension().and_then(|e| e.to_str()) == Some("ron") {
+                        let dst = dest.join(entry.file_name());
+                        if !dst.exists() {
+                            let _ = std::fs::copy(&src, &dst);
+                        }
+                    }
+                }
+            }
+        }
+
         // Migrate old keys
         migrate_keys_from_db(&app_config);
 
@@ -358,6 +375,8 @@ impl crate::backend::Backend for StarkbotEngine {
         #[allow(unused_assignments)]
         let mut integrations_cache = self.integrations.clone();
         let mut channels_cache = self.channels.clone();
+        #[allow(unused_assignments)]
+        let mut skill_tests_cache = load_skill_tests(&self.app_config);
         let mut current_session_id: Option<String> = None;
         let mut session_created_at: Option<String> = None;
         let persona_name_for_session = persona.name().to_string();
@@ -1386,6 +1405,91 @@ impl crate::backend::Backend for StarkbotEngine {
                                 let _ = event_tx.send(BackendEvent::ChannelsUpdated(channels_cache.clone()));
                             }
 
+                            FrontendCommand::SkillTestsList => {
+                                let tests = load_skill_tests(&app_config);
+                                skill_tests_cache = tests.clone();
+                                let _ = event_tx.send(BackendEvent::SkillTestsUpdated(tests));
+                            }
+
+                            FrontendCommand::SkillTestSave { id, content } => {
+                                // Validate RON parse
+                                match crate::ron_defs::TestSuiteDef::from_ron(&content) {
+                                    Ok(_) => {
+                                        let dir = app_config.skill_tests_dir();
+                                        let _ = std::fs::create_dir_all(&dir);
+                                        let path = dir.join(format!("{}.ron", id));
+                                        match std::fs::write(&path, &content) {
+                                            Ok(_) => {
+                                                let tests = load_skill_tests(&app_config);
+                                                skill_tests_cache = tests.clone();
+                                                let _ = event_tx.send(BackendEvent::SkillTestsUpdated(tests));
+                                                let msg = format!("Skill test '{}' saved.", id);
+                                                emit(&BackendEvent::Info { message: msg });
+                                            }
+                                            Err(e) => {
+                                                emit(&BackendEvent::Error { message: format!("Failed to save test: {}", e) });
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        emit(&BackendEvent::Error { message: format!("Invalid RON: {}", e) });
+                                    }
+                                }
+                            }
+
+                            FrontendCommand::SkillTestDelete { id } => {
+                                let path = app_config.skill_tests_dir().join(format!("{}.ron", id));
+                                if path.exists() {
+                                    let _ = std::fs::remove_file(&path);
+                                }
+                                let tests = load_skill_tests(&app_config);
+                                skill_tests_cache = tests.clone();
+                                let _ = event_tx.send(BackendEvent::SkillTestsUpdated(tests));
+                                let msg = format!("Skill test '{}' deleted.", id);
+                                emit(&BackendEvent::Info { message: msg });
+                            }
+
+                            FrontendCommand::SkillTestRun { id } => {
+                                let dir = app_config.skill_tests_dir();
+                                let path = dir.join(format!("{}.ron", id));
+                                match std::fs::read_to_string(&path) {
+                                    Ok(content) => {
+                                        match crate::ron_defs::TestSuiteDef::from_ron(&content) {
+                                            Ok(suite_def) => {
+                                                let suite_id = id.clone();
+                                                let etx = event_tx.clone();
+                                                let api_key_for_test = api_key.clone();
+                                                let model_for_test = model_name.clone();
+                                                let persona_for_test = persona.clone();
+                                                let skills_dir_for_test = skills_dir.clone();
+                                                let cwd_for_test = cwd.clone();
+                                                let keys_path_for_test = app_config.keys_path();
+
+                                                tokio::spawn(async move {
+                                                    run_skill_test_suite(
+                                                        suite_id,
+                                                        suite_def,
+                                                        api_key_for_test,
+                                                        model_for_test,
+                                                        persona_for_test,
+                                                        skills_dir_for_test,
+                                                        cwd_for_test,
+                                                        keys_path_for_test,
+                                                        etx,
+                                                    ).await;
+                                                });
+                                            }
+                                            Err(e) => {
+                                                emit(&BackendEvent::Error { message: format!("Failed to parse test: {}", e) });
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        emit(&BackendEvent::Error { message: format!("Failed to read test file: {}", e) });
+                                    }
+                                }
+                            }
+
                             FrontendCommand::Shutdown => {
                                 channel_manager.stop_all().await;
                                 shutdown_flag.store(true, Ordering::Relaxed);
@@ -1429,6 +1533,16 @@ impl crate::backend::Backend for StarkbotEngine {
                                             role: "error".to_string(),
                                             content: format!("{} {} failed: {}", icon, name, truncate_str(preview, 100)),
                                         });
+                                    }
+                                    // When install_integration succeeds, refresh caches and notify UI
+                                    if name == "install_integration" && *success {
+                                        if let Ok(store) = KeyStore::load(&app_config.keys_path()) {
+                                            api_keys_cache = store.list_masked().into_iter()
+                                                .map(|(n, m)| ApiKeyInfo { name: n, masked_key: m })
+                                                .collect();
+                                        }
+                                        integrations_cache = build_integrations_list(&app_config);
+                                        let _ = event_tx.send(BackendEvent::IntegrationsUpdated(integrations_cache.clone()));
                                     }
                                 }
                                 BackendEvent::ThinkingText { content } => {
@@ -1561,6 +1675,8 @@ impl crate::backend::Backend for StarkbotEngine {
             integrations: self.integrations.clone(),
             extension_server: self.app_config.settings().extension_server.clone(),
             channels: self.channels.clone(),
+            skill_tests: load_skill_tests(&self.app_config),
+            skill_tests_dir: self.app_config.skill_tests_dir().display().to_string(),
         }
     }
 
@@ -1834,6 +1950,65 @@ fn build_emitting_guard(
     })
 }
 
+fn build_test_step_guard(
+    suite_id: String,
+    test_id: String,
+    event_tx: mpsc::UnboundedSender<BackendEvent>,
+) -> StepGuard<AgentState> {
+    let seen_up_to = Arc::new(Mutex::new(0usize));
+    Arc::new(move |state: &AgentState, _event: &StepEvent| {
+        let mut cursor = seen_up_to.lock().unwrap();
+        if *cursor > state.messages.len() {
+            *cursor = 0;
+        }
+        let new_messages = &state.messages[*cursor..];
+        *cursor = state.messages.len();
+        drop(cursor);
+
+        for msg in new_messages {
+            let step = match msg {
+                AgentMessage::ToolCall { name, args, .. } => {
+                    let args_str = serde_json::to_string(args).unwrap_or_default();
+                    Some(SkillTestStep {
+                        kind: "tool_call".to_string(),
+                        name: Some(name.clone()),
+                        content: if args_str.len() > 500 { format!("{}...", &args_str[..500]) } else { args_str },
+                        success: None,
+                    })
+                }
+                AgentMessage::ToolResult { name, result, .. } => {
+                    let success = !result.starts_with("ERROR:");
+                    let preview = if result.len() > 500 { format!("{}...", &result[..500]) } else { result.clone() };
+                    Some(SkillTestStep {
+                        kind: "tool_result".to_string(),
+                        name: Some(name.clone()),
+                        content: preview,
+                        success: Some(success),
+                    })
+                }
+                AgentMessage::Assistant(text) if !text.is_empty() => {
+                    Some(SkillTestStep {
+                        kind: "thinking".to_string(),
+                        name: None,
+                        content: if text.len() > 500 { format!("{}...", &text[..500]) } else { text.clone() },
+                        success: None,
+                    })
+                }
+                _ => None,
+            };
+            if let Some(step) = step {
+                let _ = event_tx.send(BackendEvent::SkillTestStepEvent {
+                    suite_id: suite_id.clone(),
+                    test_id: test_id.clone(),
+                    step,
+                });
+            }
+        }
+
+        GuardAction::Continue
+    })
+}
+
 /// Gateway message handler that routes messages to the agent via the event bus.
 struct GatewayMessageHandler {
     #[allow(dead_code)]
@@ -1958,6 +2133,242 @@ async fn load_channels_from_db_with_manager(app_config: &AppConfig, manager: &Ch
             }
         })
         .collect()
+}
+
+/// Load skill test info from the skill_tests/ directory.
+fn load_skill_tests(app_config: &AppConfig) -> Vec<SkillTestInfo> {
+    let dir = app_config.skill_tests_dir();
+    if !dir.is_dir() {
+        return vec![];
+    }
+    let mut tests = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("ron") {
+                continue;
+            }
+            let id = path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown")
+                .to_string();
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                let (name, test_count) = match crate::ron_defs::TestSuiteDef::from_ron(&content) {
+                    Ok(suite) => (suite.name.clone(), suite.tests.len()),
+                    Err(_) => (id.clone(), 0),
+                };
+                tests.push(SkillTestInfo { id, name, test_count, content });
+            }
+        }
+    }
+    tests.sort_by(|a, b| a.id.cmp(&b.id));
+    tests
+}
+
+/// Run a skill test suite asynchronously.
+async fn run_skill_test_suite(
+    suite_id: String,
+    suite_def: crate::ron_defs::TestSuiteDef,
+    api_key: String,
+    model_name: String,
+    persona: Persona,
+    skills_dir: PathBuf,
+    cwd: String,
+    keys_path: PathBuf,
+    event_tx: mpsc::UnboundedSender<BackendEvent>,
+) {
+    use spice_framework::*;
+
+    let start = std::time::Instant::now();
+    let mut results = Vec::new();
+
+    for test_def in &suite_def.tests {
+        // Emit progress
+        let _ = event_tx.send(BackendEvent::SkillTestRunProgress {
+            suite_id: suite_id.clone(),
+            test_id: test_def.id.clone(),
+            status: "running".to_string(),
+            result: None,
+        });
+
+        let test_start = std::time::Instant::now();
+
+        // Build a one-shot agent for this test
+        let system_prompt = persona.build_system_prompt(&skills_dir, &cwd);
+        let data_root = keys_path.parent().map(|p| p.to_path_buf());
+        let tool_config = starkbot_tools::ToolConfig {
+            api_key: api_key.clone(),
+            model_name: model_name.clone(),
+            system_prompt: system_prompt.clone(),
+            skills_dir: skills_dir.clone(),
+            available_skills: persona.skills_list(),
+            keys_path: Some(keys_path.clone()),
+            custom_dir: None,
+            skill_tests_dir: None,
+            data_root,
+        };
+
+        // Check for denied_tools in config
+        let denied_tools: Vec<String> = test_def.config.as_ref()
+            .and_then(|v| v.get("denied_tools"))
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+
+        let registry = starkbot_tools::create_registry_for_with_config(&persona.tools(), Some(&tool_config));
+
+        // Build approval hook that denies specified tools (plus forbid_tools)
+        let mut all_denied = denied_tools;
+        if let Some(ref forbid) = test_def.forbid_tools {
+            all_denied.extend(forbid.iter().cloned());
+        }
+
+        let hook = if all_denied.is_empty() {
+            None
+        } else {
+            Some(Arc::new(move |name: &str, _args: &serde_json::Value| {
+                if all_denied.contains(&name.to_string()) {
+                    metalcraft::BeforeToolCallAction::Deny(format!("Tool '{}' denied by test config", name))
+                } else {
+                    metalcraft::BeforeToolCallAction::Proceed
+                }
+            }) as metalcraft::BeforeToolCallHook)
+        };
+
+        let client = match rig::providers::openai::Client::new(&api_key) {
+            Ok(c) => c,
+            Err(e) => {
+                results.push(SkillTestResult {
+                    suite_name: suite_def.name.clone(),
+                    test_id: test_def.id.clone(),
+                    test_name: test_def.name.clone(),
+                    passed: false,
+                    error: Some(format!("Client error: {}", e)),
+                    tools_called: vec![],
+                    duration_ms: test_start.elapsed().as_millis() as u64,
+                    final_text: None,
+                });
+                continue;
+            }
+        };
+
+        let model = rig::client::CompletionClient::completion_model(&client, &model_name);
+        let graph = match metalcraft::create_react_agent_with_hooks(model, registry, &system_prompt, hook) {
+            Ok(g) => g,
+            Err(e) => {
+                results.push(SkillTestResult {
+                    suite_name: suite_def.name.clone(),
+                    test_id: test_def.id.clone(),
+                    test_name: test_def.name.clone(),
+                    passed: false,
+                    error: Some(format!("Graph error: {}", e)),
+                    tools_called: vec![],
+                    duration_ms: test_start.elapsed().as_millis() as u64,
+                    final_text: None,
+                });
+                continue;
+            }
+        };
+
+        let step_guard = build_test_step_guard(suite_id.clone(), test_def.id.clone(), event_tx.clone());
+        let executor = metalcraft::Executor::new(graph)
+            .max_steps(30)
+            .with_step_guard(step_guard);
+        let state = metalcraft::AgentState::new(&test_def.prompt);
+        let run_id = uuid::Uuid::new_v4().to_string();
+
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            executor.run(state, &run_id),
+        ).await;
+
+        let (tools_called, error, final_text) = match outcome {
+            Ok(Ok(metalcraft::RunOutcome::Completed(state))) => {
+                let tools = state.tools_called();
+                let text = state.final_answer().unwrap_or("").to_string();
+                (tools, None, text)
+            }
+            Ok(Ok(metalcraft::RunOutcome::Interrupted { reason, .. })) => {
+                (vec![], Some(format!("Interrupted: {}", reason)), String::new())
+            }
+            Ok(Err(e)) => {
+                (vec![], Some(format!("Error: {}", e)), String::new())
+            }
+            Err(_) => {
+                (vec![], Some("Timed out after 120s".to_string()), String::new())
+            }
+        };
+
+        // Evaluate pass/fail
+        let mut passed = true;
+        let mut fail_reason = None;
+
+        if let Some(true) = test_def.expect_no_error {
+            if error.is_some() {
+                passed = false;
+                fail_reason = error.clone();
+            }
+        }
+
+        if let Some(ref expected) = test_def.expect_tools {
+            for tool in expected {
+                if !tools_called.contains(tool) {
+                    passed = false;
+                    fail_reason = Some(format!("Expected tool '{}' not called. Called: {:?}", tool, tools_called));
+                    break;
+                }
+            }
+        }
+
+        if let Some(ref forbidden) = test_def.forbid_tools {
+            for tool in forbidden {
+                if tools_called.contains(tool) {
+                    passed = false;
+                    fail_reason = Some(format!("Forbidden tool '{}' was called", tool));
+                    break;
+                }
+            }
+        }
+
+        if let Some(min_len) = test_def.min_response_length {
+            if final_text.len() < min_len {
+                passed = false;
+                fail_reason = Some(format!("Response too short ({} chars, expected >= {})", final_text.len(), min_len));
+            }
+        }
+
+        let result = SkillTestResult {
+            suite_name: suite_def.name.clone(),
+            test_id: test_def.id.clone(),
+            test_name: test_def.name.clone(),
+            passed,
+            error: if !passed { fail_reason.or(error) } else { None },
+            tools_called,
+            duration_ms: test_start.elapsed().as_millis() as u64,
+            final_text: if final_text.is_empty() { None } else { Some(final_text) },
+        };
+
+        let _ = event_tx.send(BackendEvent::SkillTestRunProgress {
+            suite_id: suite_id.clone(),
+            test_id: test_def.id.clone(),
+            status: if result.passed { "passed".to_string() } else { "failed".to_string() },
+            result: Some(result.clone()),
+        });
+
+        results.push(result);
+    }
+
+    let passed = results.iter().filter(|r| r.passed).count();
+    let failed = results.iter().filter(|r| !r.passed).count();
+    let duration_ms = start.elapsed().as_millis() as u64;
+
+    let report = SkillTestRunReport {
+        suite_id,
+        results,
+        passed,
+        failed,
+        duration_ms,
+    };
+    let _ = event_tx.send(BackendEvent::SkillTestRunComplete(report));
 }
 
 fn load_channel_settings(app_config: &AppConfig, channel_id: &str) -> Vec<ChannelSettingInfo> {

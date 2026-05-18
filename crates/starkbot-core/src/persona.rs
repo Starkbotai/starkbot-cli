@@ -23,7 +23,7 @@ pub fn resolve_tool_group(group: &str) -> Vec<String> {
             "sub_agent",
         ],
         "api_keys" => vec![
-            "api_keys_check", "install_api_key",
+            "api_keys_check", "install_integration",
         ],
         _ => {
             log::warn!("Unknown tool group: {}", group);
@@ -553,7 +553,7 @@ mod tests {
 
         let api_tools = resolve_tool_group("api_keys");
         assert!(api_tools.contains(&"api_keys_check".to_string()));
-        assert!(api_tools.contains(&"install_api_key".to_string()));
+        assert!(api_tools.contains(&"install_integration".to_string()));
 
         assert!(resolve_tool_group("unknown").is_empty());
     }

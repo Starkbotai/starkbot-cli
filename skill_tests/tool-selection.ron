@@ -1,0 +1,27 @@
+(
+    name: "Tool Selection",
+    tests: [
+        (
+            id: "reads-file-for-debug",
+            name: "Agent reads file when asked",
+            prompt: "Read the file Cargo.toml",
+            expect_tools: Some(["read_file"]),
+            expect_no_error: Some(true),
+            retries: Some(1),
+        ),
+        (
+            id: "uses-grep-for-search",
+            name: "Agent uses grep for content search",
+            prompt: "Find all uses of 'metalcraft' in Cargo.toml files",
+            expect_tools: Some(["grep"]),
+            retries: Some(1),
+        ),
+        (
+            id: "uses-list-for-explore",
+            name: "Agent uses list_files for directory listing",
+            prompt: "List the files in the current directory",
+            expect_tools: Some(["list_files"]),
+            retries: Some(1),
+        ),
+    ],
+)

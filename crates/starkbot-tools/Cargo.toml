@@ -17,3 +17,5 @@ serde_json = { workspace = true }
 log = { workspace = true }
 reqwest = { workspace = true }
 htmd = { workspace = true }
+ron = { workspace = true }
+chrono = { workspace = true }

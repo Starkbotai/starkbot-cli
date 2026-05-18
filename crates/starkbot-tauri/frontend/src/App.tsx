@@ -10,8 +10,9 @@ import DataView from "./components/DataView";
 import SchedulingView from "./components/SchedulingView";
 import PacksView from "./components/PacksView";
 import GatewayView from "./components/GatewayView";
+import SkillTestsView from "./components/SkillTestsView";
 
-type View = "chat" | "skills" | "personas" | "data" | "flows" | "api-keys" | "packs" | "gateway" | "settings";
+type View = "chat" | "skills" | "personas" | "data" | "flows" | "api-keys" | "packs" | "gateway" | "skill-tests" | "settings";
 
 const TABS: { id: View; label: string }[] = [
   { id: "chat", label: "Chat" },
@@ -21,6 +22,7 @@ const TABS: { id: View; label: string }[] = [
   { id: "flows", label: "Flows" },
   { id: "api-keys", label: "Integrations" },
   { id: "gateway", label: "Gateway" },
+  { id: "skill-tests", label: "Skill Tests" },
   { id: "settings", label: "Settings" },
 ];
 
@@ -34,6 +36,7 @@ function OpenFolderButton({ view, snapshot }: { view: View; snapshot: any }) {
       case "flows": return snapshot.flows_dir || "";
       case "api-keys": return snapshot.skills_dir ? snapshot.skills_dir.replace(/\/skills$/, "") : "";
       case "settings": return snapshot.skills_dir ? snapshot.skills_dir.replace(/\/skills$/, "") : "";
+      case "skill-tests": return snapshot.skill_tests_dir || "";
       default: return "";
     }
   }, [view, snapshot]);
@@ -169,6 +172,20 @@ export default function App() {
             onUpdateSetting={backend.updateChannelSetting}
             onLoadSettings={backend.loadChannelSettings}
             onListChannels={backend.listChannels}
+          />
+        )}
+        {activeView === "skill-tests" && (
+          <SkillTestsView
+            skillTests={backend.skillTests}
+            skillTestRunning={backend.skillTestRunning}
+            skillTestReport={backend.skillTestReport}
+            skillTestPartialResults={backend.skillTestPartialResults}
+            skillTestCurrentTest={backend.skillTestCurrentTest}
+            skillTestSteps={backend.skillTestSteps}
+            onListSkillTests={backend.listSkillTests}
+            onSaveSkillTest={backend.saveSkillTest}
+            onDeleteSkillTest={backend.deleteSkillTest}
+            onRunSkillTest={backend.runSkillTest}
           />
         )}
         {activeView === "settings" && (

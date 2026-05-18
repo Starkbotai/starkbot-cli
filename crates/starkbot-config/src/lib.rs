@@ -82,6 +82,10 @@ impl AppConfig {
         self.root.join("packs")
     }
 
+    pub fn skill_tests_dir(&self) -> PathBuf {
+        self.root.join("skill_tests")
+    }
+
     pub fn settings(&self) -> settings::Settings {
         settings::Settings::load(&self.settings_path()).unwrap_or_default()
     }
@@ -113,6 +117,7 @@ impl AppConfig {
             &self.flows_dir(),
             &self.integration_presets_dir(),
             &self.custom_dir(),
+            &self.skill_tests_dir(),
         ];
         for dir in &dirs {
             std::fs::create_dir_all(dir)

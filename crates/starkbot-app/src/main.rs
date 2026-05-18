@@ -134,7 +134,7 @@ async fn run_oneshot(
         None => {
             eprintln!("Error: No OpenAI API key configured.");
             eprintln!("Configure it in the GUI (Settings > Inference) or run:");
-            eprintln!("  starkbot-cli install_api_key OPENAI_API_KEY <your-key>");
+            eprintln!("  starkbot-cli install_integration OPENAI_API_KEY <your-key>");
             std::process::exit(1);
         }
     };

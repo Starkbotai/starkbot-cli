@@ -45,7 +45,7 @@ impl metalcraft::Tool for ApiKeysCheckTool {
                 "message": if exists {
                     format!("{} is configured", service_name)
                 } else {
-                    format!("{} is NOT configured. Use install_api_key to add it.", service_name)
+                    format!("{} is NOT configured. Use install_integration to add it.", service_name)
                 }
             }))
         } else {
@@ -54,7 +54,7 @@ impl metalcraft::Tool for ApiKeysCheckTool {
                 "configured_keys": names,
                 "count": names.len(),
                 "message": if names.is_empty() {
-                    "No API keys configured. Use install_api_key to add keys.".to_string()
+                    "No API keys configured. Use install_integration to add keys.".to_string()
                 } else {
                     format!("{} API key(s) configured: {}", names.len(), names.join(", "))
                 }

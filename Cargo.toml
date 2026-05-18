@@ -55,6 +55,9 @@ htmd = "0.1"
 # Platform
 dirs = "6"
 
+# RON format
+ron = "0.8"
+
 # Testing
 spice-framework = "0.1"
 

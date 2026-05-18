@@ -4,7 +4,7 @@ pub mod bash;
 pub mod edit_file;
 pub mod find_files;
 pub mod grep;
-pub mod install_api_key;
+pub mod install_integration;
 pub mod list_files;
 pub mod load_skill;
 pub mod read_file;
@@ -13,6 +13,7 @@ pub mod web_fetch;
 pub mod write_file;
 pub mod approval;
 pub mod guard;
+pub mod skill_test_tools;
 
 use std::path::PathBuf;
 use metalcraft::ToolRegistry;
@@ -26,6 +27,8 @@ pub struct ToolConfig {
     pub available_skills: Vec<String>,
     pub keys_path: Option<PathBuf>,
     pub custom_dir: Option<PathBuf>,
+    pub skill_tests_dir: Option<PathBuf>,
+    pub data_root: Option<PathBuf>,
 }
 
 /// Register only the tools listed by name.
@@ -96,16 +99,16 @@ pub fn create_registry_for_with_config(
                     registry
                 }
             }
-            "install_api_key" => {
+            "install_integration" => {
                 if let Some(cfg) = config {
-                    if let Some(ref keys_path) = cfg.keys_path {
-                        registry.register(install_api_key::InstallApiKeyTool::new(keys_path.clone()))
+                    if let Some(ref data_root) = cfg.data_root {
+                        registry.register(install_integration::InstallIntegrationTool::new(data_root.clone()))
                     } else {
-                        log::warn!("install_api_key tool requires keys_path in ToolConfig, skipping");
+                        log::warn!("install_integration tool requires data_root in ToolConfig, skipping");
                         registry
                     }
                 } else {
-                    log::warn!("install_api_key tool requires ToolConfig, skipping");
+                    log::warn!("install_integration tool requires ToolConfig, skipping");
                     registry
                 }
             }
@@ -118,6 +121,45 @@ pub fn create_registry_for_with_config(
                     ))
                 } else {
                     log::warn!("sub_agent tool requires ToolConfig, skipping");
+                    registry
+                }
+            }
+            "list_skill_tests" => {
+                if let Some(cfg) = config {
+                    if let Some(ref dir) = cfg.skill_tests_dir {
+                        registry.register(skill_test_tools::ListSkillTestsTool::new(dir.clone()))
+                    } else {
+                        log::warn!("list_skill_tests tool requires skill_tests_dir in ToolConfig, skipping");
+                        registry
+                    }
+                } else {
+                    log::warn!("list_skill_tests tool requires ToolConfig, skipping");
+                    registry
+                }
+            }
+            "create_skill_test" => {
+                if let Some(cfg) = config {
+                    if let Some(ref dir) = cfg.skill_tests_dir {
+                        registry.register(skill_test_tools::CreateSkillTestTool::new(dir.clone()))
+                    } else {
+                        log::warn!("create_skill_test tool requires skill_tests_dir in ToolConfig, skipping");
+                        registry
+                    }
+                } else {
+                    log::warn!("create_skill_test tool requires ToolConfig, skipping");
+                    registry
+                }
+            }
+            "edit_skill_test" => {
+                if let Some(cfg) = config {
+                    if let Some(ref dir) = cfg.skill_tests_dir {
+                        registry.register(skill_test_tools::EditSkillTestTool::new(dir.clone()))
+                    } else {
+                        log::warn!("edit_skill_test tool requires skill_tests_dir in ToolConfig, skipping");
+                        registry
+                    }
+                } else {
+                    log::warn!("edit_skill_test tool requires ToolConfig, skipping");
                     registry
                 }
             }

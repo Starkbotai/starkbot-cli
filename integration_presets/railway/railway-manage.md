@@ -16,7 +16,7 @@ Before any operation, check the key exists:
 api_keys_check(service_name: "RAILWAY_TOKEN")
 ```
 
-If not configured, ask the user to provide it and install via `install_api_key`.
+If not configured, ask the user to provide it and install via `install_integration`.
 Tokens are created at https://railway.com/account/tokens
 
 ## API Endpoint

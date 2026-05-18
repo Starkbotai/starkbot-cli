@@ -78,6 +78,12 @@ impl AgentRunner {
         let custom_dir = keys_path.as_ref()
             .and_then(|p| p.parent())
             .map(|root| root.join("custom"));
+        let skill_tests_dir = custom_dir.as_ref()
+            .and_then(|p| p.parent())
+            .map(|root| root.join("skill_tests"));
+        let data_root = keys_path.as_ref()
+            .and_then(|p| p.parent())
+            .map(|root| root.to_path_buf());
         let tool_config = starkbot_tools::ToolConfig {
             api_key: api_key.to_string(),
             model_name: model_name.to_string(),
@@ -86,6 +92,8 @@ impl AgentRunner {
             available_skills: skills,
             keys_path,
             custom_dir,
+            skill_tests_dir,
+            data_root,
         };
         let registry = starkbot_tools::create_registry_for_with_config(&tools, Some(&tool_config));
 

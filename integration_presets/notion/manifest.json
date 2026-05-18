@@ -1,0 +1,9 @@
+{
+  "name": "Notion",
+  "description": "Manage Notion pages, databases, and blocks via the REST API",
+  "icon": "book",
+  "requires": {
+    "api_key": "NOTION_API_KEY"
+  },
+  "skills": ["notion-manage.md"]
+}

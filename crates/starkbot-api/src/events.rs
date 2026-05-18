@@ -57,6 +57,14 @@ pub enum BackendEvent {
     GatewayMessage { channel_id: String, channel_name: String, user_name: String, text: String },
     /// A response was sent to a gateway channel.
     GatewayResponse { channel_id: String, text: String },
+    /// The skill tests list was updated.
+    SkillTestsUpdated(Vec<crate::types::SkillTestInfo>),
+    /// Progress update during a skill test run — includes completed result if available.
+    SkillTestRunProgress { suite_id: String, test_id: String, status: String, result: Option<crate::types::SkillTestResult> },
+    /// A step-level event during a skill test (tool call, tool result, thinking).
+    SkillTestStepEvent { suite_id: String, test_id: String, step: crate::types::SkillTestStep },
+    /// A skill test suite run completed.
+    SkillTestRunComplete(crate::types::SkillTestRunReport),
 }
 
 /// Commands sent from any frontend to the engine.
@@ -128,4 +136,12 @@ pub enum FrontendCommand {
     ChannelsList,
     /// Shutdown the engine.
     Shutdown,
+    /// Request skill tests list refresh.
+    SkillTestsList,
+    /// Save a skill test RON file.
+    SkillTestSave { id: String, content: String },
+    /// Delete a skill test file.
+    SkillTestDelete { id: String },
+    /// Run a skill test suite.
+    SkillTestRun { id: String },
 }

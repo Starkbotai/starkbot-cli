@@ -519,6 +519,18 @@ impl TuiState {
             BackendEvent::GatewayResponse { .. } => {
                 // Response logged via agent turn
             }
+            BackendEvent::SkillTestsUpdated(_) => {
+                // TUI doesn't display skill tests
+            }
+            BackendEvent::SkillTestRunProgress { .. } => {
+                // TUI doesn't display skill test progress
+            }
+            BackendEvent::SkillTestStepEvent { .. } => {
+                // TUI doesn't display skill test step events
+            }
+            BackendEvent::SkillTestRunComplete(_) => {
+                // TUI doesn't display skill test results
+            }
         }
     }
 

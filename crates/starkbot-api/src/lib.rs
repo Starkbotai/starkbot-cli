@@ -2,6 +2,7 @@ pub mod backend;
 pub mod engine;
 pub mod event_bus;
 pub mod events;
+pub mod ron_defs;
 pub mod types;
 
 pub use backend::{Backend, BackendConfig, BackendHandle};

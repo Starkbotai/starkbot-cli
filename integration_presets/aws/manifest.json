@@ -1,0 +1,13 @@
+{
+  "name": "AWS",
+  "description": "Manage AWS S3 and Lambda via the AWS CLI",
+  "icon": "cloud",
+  "requires": {
+    "api_keys": [
+      { "name": "AWS_ACCESS_KEY_ID", "label": "Access Key ID" },
+      { "name": "AWS_SECRET_ACCESS_KEY", "label": "Secret Access Key" },
+      { "name": "AWS_REGION", "label": "Region (optional)" }
+    ]
+  },
+  "skills": ["aws-s3.md", "aws-lambda.md"]
+}

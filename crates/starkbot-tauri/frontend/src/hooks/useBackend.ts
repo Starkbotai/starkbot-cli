@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import type { AppSnapshot, BackendEvent, ChatMessage, ChatSession, SessionSummary, SavedFlow, FlowSummary, FlowLogEntry, FlowTemplateInfo, CustomFileEntry, InternalEvent, PackInfo, ChannelInfo, ChannelSettingInfo } from "../types";
+import type { AppSnapshot, BackendEvent, ChatMessage, ChatSession, SessionSummary, SavedFlow, FlowSummary, FlowLogEntry, FlowTemplateInfo, CustomFileEntry, InternalEvent, PackInfo, ChannelInfo, ChannelSettingInfo, SkillTestInfo, SkillTestRunReport, SkillTestResult, SkillTestStep } from "../types";
 
 interface PendingApproval {
   request_id: string;
@@ -40,6 +40,12 @@ interface BackendState {
   channels: ChannelInfo[];
   channelSettings: ChannelSettingInfo[];
   selectedChannelId: string | null;
+  skillTests: SkillTestInfo[];
+  skillTestRunning: string | null;
+  skillTestReport: SkillTestRunReport | null;
+  skillTestPartialResults: SkillTestResult[];
+  skillTestCurrentTest: string | null;
+  skillTestSteps: Record<string, SkillTestStep[]>;
 }
 
 export function useBackend() {
@@ -68,6 +74,12 @@ export function useBackend() {
     channels: [],
     channelSettings: [],
     selectedChannelId: null,
+    skillTests: [],
+    skillTestRunning: null,
+    skillTestReport: null,
+    skillTestPartialResults: [],
+    skillTestCurrentTest: null,
+    skillTestSteps: {},
   });
 
   const messagesRef = useRef(state.messages);
@@ -87,6 +99,7 @@ export function useBackend() {
         sessions: snapshot.sessions ?? [],
         inferenceConfigured: snapshot.inference_configured ?? false,
         channels: snapshot.channels ?? [],
+        skillTests: snapshot.skill_tests ?? [],
         snapshot,
       }));
     };
@@ -263,6 +276,40 @@ export function useBackend() {
         // Response logged via agent turn
         return prev;
       }
+      if ("SkillTestsUpdated" in evt) {
+        return { ...prev, skillTests: evt.SkillTestsUpdated };
+      }
+      if ("SkillTestRunProgress" in evt) {
+        const p = evt.SkillTestRunProgress;
+        if (p.result) {
+          // A test just finished — append to partial results
+          return {
+            ...prev,
+            skillTestRunning: p.suite_id,
+            skillTestCurrentTest: null,
+            skillTestPartialResults: [...prev.skillTestPartialResults, p.result],
+          };
+        }
+        // A test just started running
+        return { ...prev, skillTestRunning: p.suite_id, skillTestCurrentTest: p.test_id };
+      }
+      if ("SkillTestStepEvent" in evt) {
+        const { test_id, step } = evt.SkillTestStepEvent;
+        const existing = prev.skillTestSteps[test_id] ?? [];
+        return {
+          ...prev,
+          skillTestSteps: { ...prev.skillTestSteps, [test_id]: [...existing, step] },
+        };
+      }
+      if ("SkillTestRunComplete" in evt) {
+        return {
+          ...prev,
+          skillTestRunning: null,
+          skillTestCurrentTest: null,
+          skillTestReport: evt.SkillTestRunComplete,
+          skillTestPartialResults: [],
+        };
+      }
       if ("Snapshot" in evt) {
         const snapshot = evt.Snapshot;
         return {
@@ -276,6 +323,7 @@ export function useBackend() {
           sessions: snapshot.sessions ?? [],
           inferenceConfigured: snapshot.inference_configured ?? false,
           channels: snapshot.channels ?? [],
+          skillTests: snapshot.skill_tests ?? [],
           snapshot,
         };
       }
@@ -454,6 +502,23 @@ export function useBackend() {
     await invoke("channels_list");
   }, []);
 
+  const listSkillTests = useCallback(async () => {
+    await invoke("skill_tests_list");
+  }, []);
+
+  const saveSkillTest = useCallback(async (id: string, content: string) => {
+    await invoke("skill_test_save", { id, content });
+  }, []);
+
+  const deleteSkillTest = useCallback(async (id: string) => {
+    await invoke("skill_test_delete", { id });
+  }, []);
+
+  const runSkillTest = useCallback(async (id: string) => {
+    setState((prev) => ({ ...prev, skillTestRunning: id, skillTestReport: null, skillTestPartialResults: [], skillTestCurrentTest: null, skillTestSteps: {} }));
+    await invoke("skill_test_run", { id });
+  }, []);
+
   const uninstallPack = useCallback(async (slug: string) => {
     setState((prev) => ({
       ...prev,
@@ -500,5 +565,9 @@ export function useBackend() {
     updateChannelSetting,
     loadChannelSettings,
     listChannels,
+    listSkillTests,
+    saveSkillTest,
+    deleteSkillTest,
+    runSkillTest,
   };
 }

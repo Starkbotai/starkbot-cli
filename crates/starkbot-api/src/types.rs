@@ -132,6 +132,47 @@ pub struct InternalEventDto {
     pub payload: String,
 }
 
+/// Info about a skill test suite for display.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillTestInfo {
+    pub id: String,
+    pub name: String,
+    pub test_count: usize,
+    pub content: String,
+}
+
+/// A step-level event during a skill test (tool call, tool result, thinking).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillTestStep {
+    pub kind: String,
+    pub name: Option<String>,
+    pub content: String,
+    pub success: Option<bool>,
+}
+
+/// Result of a single test within a suite run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillTestResult {
+    pub suite_name: String,
+    pub test_id: String,
+    pub test_name: String,
+    pub passed: bool,
+    pub error: Option<String>,
+    pub tools_called: Vec<String>,
+    pub duration_ms: u64,
+    pub final_text: Option<String>,
+}
+
+/// Report from running an entire test suite.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillTestRunReport {
+    pub suite_id: String,
+    pub results: Vec<SkillTestResult>,
+    pub passed: usize,
+    pub failed: usize,
+    pub duration_ms: u64,
+}
+
 /// Full application state snapshot for frontends.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSnapshot {
@@ -156,4 +197,6 @@ pub struct AppSnapshot {
     pub integrations: Vec<IntegrationPresetInfo>,
     pub extension_server: String,
     pub channels: Vec<ChannelInfo>,
+    pub skill_tests: Vec<SkillTestInfo>,
+    pub skill_tests_dir: String,
 }

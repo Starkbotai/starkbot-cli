@@ -1,0 +1,19 @@
+(
+    name: "Conversation Quality",
+    tests: [
+        (
+            id: "substantive-code-answer",
+            name: "Agent produces substantive code response",
+            prompt: "Write a Rust function that checks if a number is prime",
+            expect_no_error: Some(true),
+            min_response_length: Some(50),
+        ),
+        (
+            id: "substantive-explanation",
+            name: "Agent produces substantive explanation",
+            prompt: "Explain the difference between Box, Rc, and Arc in Rust",
+            expect_no_error: Some(true),
+            min_response_length: Some(100),
+        ),
+    ],
+)

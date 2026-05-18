@@ -1,0 +1,9 @@
+{
+  "name": "DigitalOcean",
+  "description": "Manage DigitalOcean droplets, domains, apps, and databases via the DO API",
+  "icon": "server",
+  "requires": {
+    "api_key": "DIGITALOCEAN_TOKEN"
+  },
+  "skills": ["digitalocean-manage.md"]
+}

@@ -222,6 +222,34 @@ async fn pack_uninstall(slug: String, state: tauri::State<'_, Arc<AppState>>) ->
         .map_err(|e| format!("Failed to send: {}", e))
 }
 
+/// Tauri command: list skill tests.
+#[tauri::command]
+async fn skill_tests_list(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::SkillTestsList)
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
+/// Tauri command: save a skill test.
+#[tauri::command]
+async fn skill_test_save(id: String, content: String, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::SkillTestSave { id, content })
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
+/// Tauri command: delete a skill test.
+#[tauri::command]
+async fn skill_test_delete(id: String, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::SkillTestDelete { id })
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
+/// Tauri command: run a skill test suite.
+#[tauri::command]
+async fn skill_test_run(id: String, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::SkillTestRun { id })
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
 /// Tauri command: list files in the custom/ directory.
 #[tauri::command]
 async fn list_custom_files(_state: tauri::State<'_, Arc<starkbot_api::types::AppSnapshot>>) -> Result<Vec<CustomFileEntry>, String> {
@@ -464,6 +492,10 @@ fn main() {
             channel_setting_update,
             channel_settings_load,
             channels_list,
+            skill_tests_list,
+            skill_test_save,
+            skill_test_delete,
+            skill_test_run,
         ])
         .run(tauri::generate_context!("tauri.conf.json"))
         .expect("error while running tauri application");
