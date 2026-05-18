@@ -92,7 +92,8 @@ impl ChannelSettingKey {
     pub fn input_type(&self) -> &'static str {
         match self {
             Self::ListenPort => "number",
-            Self::AuthToken | Self::DiscordBotToken | Self::TelegramBotToken => "password",
+            Self::DiscordBotToken | Self::TelegramBotToken => "password",
+            Self::AuthToken => "text",
             Self::SafeMode => "toggle",
         }
     }
