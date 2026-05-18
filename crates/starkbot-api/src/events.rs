@@ -49,6 +49,14 @@ pub enum BackendEvent {
     PackInstalled { slug: String },
     /// A pack operation failed.
     PackError { message: String },
+    /// The channels list was updated.
+    ChannelsUpdated(Vec<crate::types::ChannelInfo>),
+    /// Channel settings were loaded.
+    ChannelSettingsLoaded { channel_id: String, settings: Vec<crate::types::ChannelSettingInfo> },
+    /// A message was received from a gateway channel.
+    GatewayMessage { channel_id: String, channel_name: String, user_name: String, text: String },
+    /// A response was sent to a gateway channel.
+    GatewayResponse { channel_id: String, text: String },
 }
 
 /// Commands sent from any frontend to the engine.
@@ -104,6 +112,20 @@ pub enum FrontendCommand {
     PackInstall { slug: String },
     /// Uninstall a local pack by slug.
     PackUninstall { slug: String },
+    /// Create a new gateway channel.
+    ChannelCreate { channel_type: String, name: String },
+    /// Delete a gateway channel.
+    ChannelDelete { channel_id: String },
+    /// Start a gateway channel.
+    ChannelStart { channel_id: String },
+    /// Stop a gateway channel.
+    ChannelStop { channel_id: String },
+    /// Update a channel setting.
+    ChannelSettingUpdate { channel_id: String, key: String, value: String },
+    /// Load settings for a channel.
+    ChannelSettingsLoad { channel_id: String },
+    /// List all channels.
+    ChannelsList,
     /// Shutdown the engine.
     Shutdown,
 }

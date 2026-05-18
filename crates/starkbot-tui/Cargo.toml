@@ -8,6 +8,7 @@ starkbot-api = { path = "../starkbot-api" }
 starkbot-core = { path = "../starkbot-core" }
 starkbot-graph = { path = "../starkbot-graph" }
 starkbot-skills = { path = "../starkbot-skills" }
+starkbot-gateway = { path = "../starkbot-gateway" }
 ratatui = { workspace = true }
 crossterm = { workspace = true }
 tokio = { workspace = true }

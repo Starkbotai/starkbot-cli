@@ -104,6 +104,26 @@ pub struct FlowTemplateInfo {
     pub template_name: String,
 }
 
+/// Info about a gateway channel for display.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelInfo {
+    pub id: String,
+    pub channel_type: String,
+    pub name: String,
+    pub enabled: bool,
+    pub running: bool,
+    pub safe_mode: bool,
+}
+
+/// Info about a channel setting for display.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelSettingInfo {
+    pub key: String,
+    pub label: String,
+    pub value: String,
+    pub input_type: String,
+}
+
 /// A DTO for internal event bus events.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InternalEventDto {
@@ -135,4 +155,5 @@ pub struct AppSnapshot {
     pub inference_configured: bool,
     pub integrations: Vec<IntegrationPresetInfo>,
     pub extension_server: String,
+    pub channels: Vec<ChannelInfo>,
 }

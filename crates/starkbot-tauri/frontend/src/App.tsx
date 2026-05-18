@@ -9,8 +9,9 @@ import ApiKeysView from "./components/ApiKeysView";
 import DataView from "./components/DataView";
 import SchedulingView from "./components/SchedulingView";
 import PacksView from "./components/PacksView";
+import GatewayView from "./components/GatewayView";
 
-type View = "chat" | "skills" | "personas" | "data" | "flows" | "api-keys" | "packs" | "settings";
+type View = "chat" | "skills" | "personas" | "data" | "flows" | "api-keys" | "packs" | "gateway" | "settings";
 
 const TABS: { id: View; label: string }[] = [
   { id: "chat", label: "Chat" },
@@ -19,7 +20,8 @@ const TABS: { id: View; label: string }[] = [
   { id: "data", label: "Data" },
   { id: "flows", label: "Flows" },
   { id: "api-keys", label: "Integrations" },
-{ id: "settings", label: "Settings" },
+  { id: "gateway", label: "Gateway" },
+  { id: "settings", label: "Settings" },
 ];
 
 function OpenFolderButton({ view, snapshot }: { view: View; snapshot: any }) {
@@ -154,6 +156,19 @@ export default function App() {
             onListPacks={backend.listPacks}
             onInstall={backend.installPack}
             onUninstall={backend.uninstallPack}
+          />
+        )}
+        {activeView === "gateway" && (
+          <GatewayView
+            channels={backend.channels}
+            channelSettings={backend.channelSettings}
+            onCreateChannel={backend.createChannel}
+            onDeleteChannel={backend.deleteChannel}
+            onStartChannel={backend.startChannel}
+            onStopChannel={backend.stopChannel}
+            onUpdateSetting={backend.updateChannelSetting}
+            onLoadSettings={backend.loadChannelSettings}
+            onListChannels={backend.listChannels}
           />
         )}
         {activeView === "settings" && (

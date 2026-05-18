@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import type { AppSnapshot, BackendEvent, ChatMessage, ChatSession, SessionSummary, SavedFlow, FlowSummary, FlowLogEntry, FlowTemplateInfo, CustomFileEntry, InternalEvent, PackInfo } from "../types";
+import type { AppSnapshot, BackendEvent, ChatMessage, ChatSession, SessionSummary, SavedFlow, FlowSummary, FlowLogEntry, FlowTemplateInfo, CustomFileEntry, InternalEvent, PackInfo, ChannelInfo, ChannelSettingInfo } from "../types";
 
 interface PendingApproval {
   request_id: string;
@@ -37,6 +37,9 @@ interface BackendState {
   remotePacks: PackInfo[];
   packsLoading: boolean;
   packsMessage: string | null;
+  channels: ChannelInfo[];
+  channelSettings: ChannelSettingInfo[];
+  selectedChannelId: string | null;
 }
 
 export function useBackend() {
@@ -62,6 +65,9 @@ export function useBackend() {
     remotePacks: [],
     packsLoading: false,
     packsMessage: null,
+    channels: [],
+    channelSettings: [],
+    selectedChannelId: null,
   });
 
   const messagesRef = useRef(state.messages);
@@ -80,6 +86,7 @@ export function useBackend() {
         agentBusy: snapshot.agent_busy,
         sessions: snapshot.sessions ?? [],
         inferenceConfigured: snapshot.inference_configured ?? false,
+        channels: snapshot.channels ?? [],
         snapshot,
       }));
     };
@@ -234,6 +241,28 @@ export function useBackend() {
       if ("PackError" in evt) {
         return { ...prev, packsLoading: false, packsMessage: `Error: ${evt.PackError.message}` };
       }
+      if ("ChannelsUpdated" in evt) {
+        return { ...prev, channels: evt.ChannelsUpdated };
+      }
+      if ("ChannelSettingsLoaded" in evt) {
+        return {
+          ...prev,
+          channelSettings: evt.ChannelSettingsLoaded.settings,
+          selectedChannelId: evt.ChannelSettingsLoaded.channel_id,
+        };
+      }
+      if ("GatewayMessage" in evt) {
+        const { channel_name, user_name, text } = evt.GatewayMessage;
+        const truncText = text.length > 100 ? text.slice(0, 100) + "..." : text;
+        return {
+          ...prev,
+          messages: [...prev.messages, { role: "tool", content: `[gateway:${channel_name}] ${user_name}: ${truncText}` }],
+        };
+      }
+      if ("GatewayResponse" in evt) {
+        // Response logged via agent turn
+        return prev;
+      }
       if ("Snapshot" in evt) {
         const snapshot = evt.Snapshot;
         return {
@@ -246,6 +275,7 @@ export function useBackend() {
           agentBusy: snapshot.agent_busy,
           sessions: snapshot.sessions ?? [],
           inferenceConfigured: snapshot.inference_configured ?? false,
+          channels: snapshot.channels ?? [],
           snapshot,
         };
       }
@@ -395,6 +425,35 @@ export function useBackend() {
     await invoke("pack_install", { slug });
   }, []);
 
+  const createChannel = useCallback(async (channelType: string, name: string) => {
+    await invoke("channel_create", { channelType, name });
+  }, []);
+
+  const deleteChannel = useCallback(async (channelId: string) => {
+    setState((prev) => ({ ...prev, channelSettings: [], selectedChannelId: null }));
+    await invoke("channel_delete", { channelId });
+  }, []);
+
+  const startChannel = useCallback(async (channelId: string) => {
+    await invoke("channel_start", { channelId });
+  }, []);
+
+  const stopChannel = useCallback(async (channelId: string) => {
+    await invoke("channel_stop", { channelId });
+  }, []);
+
+  const updateChannelSetting = useCallback(async (channelId: string, key: string, value: string) => {
+    await invoke("channel_setting_update", { channelId, key, value });
+  }, []);
+
+  const loadChannelSettings = useCallback(async (channelId: string) => {
+    await invoke("channel_settings_load", { channelId });
+  }, []);
+
+  const listChannels = useCallback(async () => {
+    await invoke("channels_list");
+  }, []);
+
   const uninstallPack = useCallback(async (slug: string) => {
     setState((prev) => ({
       ...prev,
@@ -434,5 +493,12 @@ export function useBackend() {
     listPacks,
     installPack,
     uninstallPack,
+    createChannel,
+    deleteChannel,
+    startChannel,
+    stopChannel,
+    updateChannelSetting,
+    loadChannelSettings,
+    listChannels,
   };
 }

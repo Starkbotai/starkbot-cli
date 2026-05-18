@@ -157,6 +157,22 @@ export interface CustomFileEntry {
   is_dir: boolean;
 }
 
+export interface ChannelInfo {
+  id: string;
+  channel_type: string;
+  name: string;
+  enabled: boolean;
+  running: boolean;
+  safe_mode: boolean;
+}
+
+export interface ChannelSettingInfo {
+  key: string;
+  label: string;
+  value: string;
+  input_type: string;
+}
+
 export interface AppSnapshot {
   persona_name: string;
   model_name: string;
@@ -178,6 +194,7 @@ export interface AppSnapshot {
   inference_configured: boolean;
   integrations: IntegrationPresetInfo[];
   extension_server: string;
+  channels: ChannelInfo[];
 }
 
 // BackendEvent variants (comes as JSON string from Tauri)
@@ -204,4 +221,8 @@ export type BackendEvent =
   | { EventsLogUpdated: InternalEvent[] }
   | { PacksListed: PackInfo[] }
   | { PackInstalled: { slug: string } }
-  | { PackError: { message: string } };
+  | { PackError: { message: string } }
+  | { ChannelsUpdated: ChannelInfo[] }
+  | { ChannelSettingsLoaded: { channel_id: string; settings: ChannelSettingInfo[] } }
+  | { GatewayMessage: { channel_id: string; channel_name: string; user_name: string; text: string } }
+  | { GatewayResponse: { channel_id: string; text: string } };

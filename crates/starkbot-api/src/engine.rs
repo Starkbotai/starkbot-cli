@@ -15,6 +15,7 @@ use starkbot_config::sessions;
 use starkbot_config::schedules;
 use starkbot_config::integrations;
 use starkbot_config::AppConfig;
+use starkbot_gateway::{ChannelManager, ChannelType};
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -68,6 +69,9 @@ pub struct StarkbotEngine {
 
     // Integrations
     integrations: Vec<IntegrationPresetInfo>,
+
+    // Gateway channels
+    channels: Vec<ChannelInfo>,
 
     // Approval tracking (shared with async tasks)
     pending_approvals: PendingApprovals,
@@ -240,6 +244,9 @@ impl StarkbotEngine {
         // Load integrations
         let integration_list = build_integrations_list(&app_config);
 
+        // Load channels
+        let channels = load_channels_from_db(&app_config);
+
         Ok(Self {
             persona,
             api_key,
@@ -262,6 +269,7 @@ impl StarkbotEngine {
             sessions: session_list,
             current_session_id: None,
             integrations: integration_list,
+            channels,
             pending_approvals: Arc::new(Mutex::new(HashMap::new())),
             approval_counter: Arc::new(Mutex::new(0)),
         })
@@ -349,6 +357,7 @@ impl crate::backend::Backend for StarkbotEngine {
         let mut api_keys_cache = self.api_keys.clone();
         #[allow(unused_assignments)]
         let mut integrations_cache = self.integrations.clone();
+        let mut channels_cache = self.channels.clone();
         let mut current_session_id: Option<String> = None;
         let mut session_created_at: Option<String> = None;
         let persona_name_for_session = persona.name().to_string();
@@ -701,6 +710,14 @@ impl crate::backend::Backend for StarkbotEngine {
         let shared_api_key_for_loop = shared_api_key.clone();
         let shared_model_for_loop = shared_model_name.clone();
 
+        // Create channel manager with message handler
+        let gateway_event_tx = event_tx.clone();
+        let gateway_handler = GatewayMessageHandler {
+            event_bus: event_bus.clone(),
+            event_tx: gateway_event_tx,
+        };
+        let channel_manager = Arc::new(ChannelManager::new(Arc::new(gateway_handler)));
+
         // Spawn the main engine loop
         tokio::spawn(async move {
             let event_tx = event_tx_clone;
@@ -708,6 +725,7 @@ impl crate::backend::Backend for StarkbotEngine {
             let shutdown_flag = shutdown_for_loop;
             let shared_api_key = shared_api_key_for_loop;
             let shared_model = shared_model_for_loop;
+            let channel_manager = channel_manager;
 
             let emit = |evt: &BackendEvent| {
                 let _ = event_tx.send(evt.clone());
@@ -1273,7 +1291,103 @@ impl crate::backend::Backend for StarkbotEngine {
                                 }
                             }
 
+                            FrontendCommand::ChannelCreate { channel_type, name } => {
+                                let db_path = app_config.root().join("starkbot.db");
+                                if let Ok(db) = starkbot_db::Database::open(&db_path) {
+                                    let id = uuid::Uuid::new_v4().to_string();
+                                    let _ = db.create_channel(&id, &channel_type, &name);
+                                    // Set defaults for custom channels
+                                    if channel_type == "custom" {
+                                        let _ = db.set_channel_setting(&id, "listen_port", "9090");
+                                    }
+                                    let _ = db.set_channel_setting(&id, "safe_mode", "1");
+                                }
+                                channels_cache = load_channels_from_db(&app_config);
+                                let _ = event_tx.send(BackendEvent::ChannelsUpdated(channels_cache.clone()));
+                            }
+
+                            FrontendCommand::ChannelDelete { channel_id } => {
+                                channel_manager.stop_channel(&channel_id).await;
+                                let db_path = app_config.root().join("starkbot.db");
+                                if let Ok(db) = starkbot_db::Database::open(&db_path) {
+                                    let _ = db.delete_channel(&channel_id);
+                                }
+                                channels_cache = load_channels_from_db(&app_config);
+                                let _ = event_tx.send(BackendEvent::ChannelsUpdated(channels_cache.clone()));
+                            }
+
+                            FrontendCommand::ChannelStart { channel_id } => {
+                                let db_path = app_config.root().join("starkbot.db");
+                                if let Ok(db) = starkbot_db::Database::open(&db_path) {
+                                    let channels = db.list_channels().unwrap_or_default();
+                                    if let Some(ch) = channels.iter().find(|c| c.0 == channel_id) {
+                                        let ct = ChannelType::from_str(&ch.1);
+                                        let settings: HashMap<String, String> = db.get_channel_settings(&channel_id)
+                                            .unwrap_or_default()
+                                            .into_iter()
+                                            .collect();
+                                        match ct {
+                                            Some(ct) => {
+                                                match channel_manager.start_channel(channel_id.clone(), ct, ch.2.clone(), &settings).await {
+                                                    Ok(_) => {
+                                                        let _ = db.set_channel_enabled(&channel_id, true);
+                                                        let _ = event_tx.send(BackendEvent::Info {
+                                                            message: format!("Channel '{}' started", ch.2),
+                                                        });
+                                                    }
+                                                    Err(e) => {
+                                                        let _ = event_tx.send(BackendEvent::Error {
+                                                            message: format!("Failed to start channel: {}", e),
+                                                        });
+                                                    }
+                                                }
+                                            }
+                                            None => {
+                                                let _ = event_tx.send(BackendEvent::Error {
+                                                    message: format!("Unknown channel type: {}", ch.1),
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                                channels_cache = load_channels_from_db_with_manager(&app_config, &channel_manager).await;
+                                let _ = event_tx.send(BackendEvent::ChannelsUpdated(channels_cache.clone()));
+                            }
+
+                            FrontendCommand::ChannelStop { channel_id } => {
+                                let stopped = channel_manager.stop_channel(&channel_id).await;
+                                if stopped {
+                                    let db_path = app_config.root().join("starkbot.db");
+                                    if let Ok(db) = starkbot_db::Database::open(&db_path) {
+                                        let _ = db.set_channel_enabled(&channel_id, false);
+                                    }
+                                }
+                                channels_cache = load_channels_from_db_with_manager(&app_config, &channel_manager).await;
+                                let _ = event_tx.send(BackendEvent::ChannelsUpdated(channels_cache.clone()));
+                            }
+
+                            FrontendCommand::ChannelSettingUpdate { channel_id, key, value } => {
+                                let db_path = app_config.root().join("starkbot.db");
+                                if let Ok(db) = starkbot_db::Database::open(&db_path) {
+                                    let _ = db.set_channel_setting(&channel_id, &key, &value);
+                                }
+                                // Re-emit settings
+                                let settings = load_channel_settings(&app_config, &channel_id);
+                                let _ = event_tx.send(BackendEvent::ChannelSettingsLoaded { channel_id, settings });
+                            }
+
+                            FrontendCommand::ChannelSettingsLoad { channel_id } => {
+                                let settings = load_channel_settings(&app_config, &channel_id);
+                                let _ = event_tx.send(BackendEvent::ChannelSettingsLoaded { channel_id, settings });
+                            }
+
+                            FrontendCommand::ChannelsList => {
+                                channels_cache = load_channels_from_db_with_manager(&app_config, &channel_manager).await;
+                                let _ = event_tx.send(BackendEvent::ChannelsUpdated(channels_cache.clone()));
+                            }
+
                             FrontendCommand::Shutdown => {
+                                channel_manager.stop_all().await;
                                 shutdown_flag.store(true, Ordering::Relaxed);
                                 break;
                             }
@@ -1446,6 +1560,7 @@ impl crate::backend::Backend for StarkbotEngine {
             inference_configured: !self.api_key.is_empty(),
             integrations: self.integrations.clone(),
             extension_server: self.app_config.settings().extension_server.clone(),
+            channels: self.channels.clone(),
         }
     }
 
@@ -1514,10 +1629,11 @@ fn handle_slash_command(
 }
 
 fn truncate_str(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        s.to_string()
+    let truncated: String = s.chars().take(max).collect();
+    if truncated.len() < s.len() {
+        format!("{}...", truncated)
     } else {
-        format!("{}...", &s[..max])
+        truncated
     }
 }
 
@@ -1716,6 +1832,161 @@ fn build_emitting_guard(
         // Delegate to inner guard for safety checks
         inner(state, event)
     })
+}
+
+/// Gateway message handler that routes messages to the agent via the event bus.
+struct GatewayMessageHandler {
+    #[allow(dead_code)]
+    event_bus: Arc<crate::event_bus::EventBus>,
+    event_tx: mpsc::UnboundedSender<BackendEvent>,
+}
+
+#[async_trait::async_trait]
+impl starkbot_gateway::MessageHandler for GatewayMessageHandler {
+    async fn handle_message(&self, msg: starkbot_gateway::NormalizedMessage) -> Result<String, String> {
+        let _ = self.event_tx.send(BackendEvent::GatewayMessage {
+            channel_id: msg.channel_id.clone(),
+            channel_name: msg.channel_type.display_name().to_string(),
+            user_name: msg.user_name.clone(),
+            text: msg.text.clone(),
+        });
+
+        // Build a one-shot agent to handle the message
+        let config = starkbot_config::AppConfig::open();
+        let keys_path = config.keys_path();
+        let store = KeyStore::load(&keys_path).unwrap_or_default();
+        let api_key = store.get("OPENAI_API_KEY").unwrap_or_default().to_string();
+        if api_key.is_empty() {
+            return Err("No API key configured".to_string());
+        }
+
+        let settings = starkbot_config::settings::Settings::load(&config.settings_path()).unwrap_or_default();
+        let model_name = settings.model;
+
+        let personas_dir = starkbot_core::persona::Persona::default_personas_dir();
+        let config_agents_dir = config.agents_dir();
+        let persona = starkbot_core::persona::Persona::load_with_config(
+            "starkbot", Some(&config_agents_dir), &personas_dir,
+        ).map_err(|e| format!("Persona load error: {}", e))?;
+
+        let skills_dir = config.skills_dir();
+        let cwd = std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| ".".to_string());
+
+        // Gateway messages always auto-approve since there is no interactive approval channel.
+        // Safe mode is informational (passed in the prompt prefix so the agent knows).
+        let approval_mode = starkbot_tools::approval::ApprovalMode::AutoApprove;
+
+        let runner = starkbot_core::dispatch::AgentRunner::build_for_tui(
+            &persona, &skills_dir, &cwd, &api_key, &model_name,
+            approval_mode, Some(keys_path),
+        ).map_err(|e| format!("Runner build error: {}", e))?;
+
+        let prefix = format!("[gateway:{} from {}] ", msg.channel_type.display_name(), msg.user_name);
+        let prompt = format!("{}{}",  prefix, msg.text);
+        let state = metalcraft::AgentState::new(&prompt);
+
+        let executor = metalcraft::Executor::new_from_arc(runner.graph.clone())
+            .max_steps(50)
+            .with_step_guard(runner.step_guard.clone());
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            executor.run(state, "agent"),
+        ).await;
+
+        let response = match result {
+            Ok(Ok(metalcraft::RunOutcome::Completed(state))) => {
+                state.final_answer().unwrap_or("(no answer)").to_string()
+            }
+            Ok(Ok(metalcraft::RunOutcome::Interrupted { reason, .. })) => {
+                format!("Interrupted: {}", reason)
+            }
+            Ok(Err(e)) => format!("Error: {}", e),
+            Err(_) => "Request timed out".to_string(),
+        };
+
+        let _ = self.event_tx.send(BackendEvent::GatewayResponse {
+            channel_id: msg.channel_id,
+            text: response.clone(),
+        });
+
+        Ok(response)
+    }
+}
+
+fn load_channels_from_db(app_config: &AppConfig) -> Vec<ChannelInfo> {
+    let db_path = app_config.root().join("starkbot.db");
+    let db = match starkbot_db::Database::open(&db_path) {
+        Ok(db) => db,
+        Err(_) => return vec![],
+    };
+    db.list_channels()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(id, channel_type, name, enabled, safe_mode, _created_at)| ChannelInfo {
+            id,
+            channel_type,
+            name,
+            enabled,
+            running: false, // Can't check without manager
+            safe_mode,
+        })
+        .collect()
+}
+
+async fn load_channels_from_db_with_manager(app_config: &AppConfig, manager: &ChannelManager) -> Vec<ChannelInfo> {
+    let db_path = app_config.root().join("starkbot.db");
+    let db = match starkbot_db::Database::open(&db_path) {
+        Ok(db) => db,
+        Err(_) => return vec![],
+    };
+    let running_ids = manager.running_ids().await;
+    db.list_channels()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(id, channel_type, name, enabled, safe_mode, _created_at)| {
+            let running = running_ids.contains(&id);
+            ChannelInfo {
+                id,
+                channel_type,
+                name,
+                enabled,
+                running,
+                safe_mode,
+            }
+        })
+        .collect()
+}
+
+fn load_channel_settings(app_config: &AppConfig, channel_id: &str) -> Vec<ChannelSettingInfo> {
+    let db_path = app_config.root().join("starkbot.db");
+    let db = match starkbot_db::Database::open(&db_path) {
+        Ok(db) => db,
+        Err(_) => return vec![],
+    };
+
+    // Get channel type to know which keys to show
+    let channels = db.list_channels().unwrap_or_default();
+    let channel = channels.iter().find(|c| c.0 == channel_id);
+    let ct = channel.and_then(|c| ChannelType::from_str(&c.1));
+
+    let stored: HashMap<String, String> = db.get_channel_settings(channel_id)
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+
+    let keys = ct.map(|ct| ct.setting_keys()).unwrap_or(&[]);
+    keys.iter().map(|k| {
+        let value = stored.get(k.as_str()).cloned().unwrap_or_default();
+        ChannelSettingInfo {
+            key: k.as_str().to_string(),
+            label: k.label().to_string(),
+            value,
+            input_type: k.input_type().to_string(),
+        }
+    }).collect()
 }
 
 /// Create a backend engine from config.

@@ -152,6 +152,55 @@ async fn flow_list_templates(state: tauri::State<'_, Arc<AppState>>) -> Result<(
         .map_err(|e| format!("Failed to send: {}", e))
 }
 
+/// Tauri command: create a gateway channel.
+#[tauri::command]
+async fn channel_create(channel_type: String, name: String, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::ChannelCreate { channel_type, name })
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
+/// Tauri command: delete a gateway channel.
+#[tauri::command]
+async fn channel_delete(channel_id: String, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::ChannelDelete { channel_id })
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
+/// Tauri command: start a gateway channel.
+#[tauri::command]
+async fn channel_start(channel_id: String, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::ChannelStart { channel_id })
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
+/// Tauri command: stop a gateway channel.
+#[tauri::command]
+async fn channel_stop(channel_id: String, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::ChannelStop { channel_id })
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
+/// Tauri command: update a channel setting.
+#[tauri::command]
+async fn channel_setting_update(channel_id: String, key: String, value: String, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::ChannelSettingUpdate { channel_id, key, value })
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
+/// Tauri command: load settings for a channel.
+#[tauri::command]
+async fn channel_settings_load(channel_id: String, state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::ChannelSettingsLoad { channel_id })
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
+/// Tauri command: list all channels.
+#[tauri::command]
+async fn channels_list(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    state.cmd_tx.send(FrontendCommand::ChannelsList)
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
 /// Tauri command: fetch packs list from extension server.
 #[tauri::command]
 async fn packs_list(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
@@ -408,6 +457,13 @@ fn main() {
             packs_list,
             pack_install,
             pack_uninstall,
+            channel_create,
+            channel_delete,
+            channel_start,
+            channel_stop,
+            channel_setting_update,
+            channel_settings_load,
+            channels_list,
         ])
         .run(tauri::generate_context!("tauri.conf.json"))
         .expect("error while running tauri application");

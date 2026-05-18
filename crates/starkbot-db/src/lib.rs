@@ -130,6 +130,22 @@ impl Database {
                 content,
                 tokenize='porter'
             );
+
+            CREATE TABLE IF NOT EXISTS channels (
+                id TEXT PRIMARY KEY,
+                channel_type TEXT NOT NULL,
+                name TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                safe_mode INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS channel_settings (
+                channel_id TEXT NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+                key TEXT NOT NULL,
+                value TEXT NOT NULL,
+                PRIMARY KEY (channel_id, key)
+            );
             ",
         )?;
         Ok(())
@@ -306,6 +322,77 @@ impl Database {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
         })?;
         rows.collect()
+    }
+
+    // -- Channel operations --
+
+    pub fn create_channel(&self, id: &str, channel_type: &str, name: &str) -> SqlResult<()> {
+        self.conn.execute(
+            "INSERT INTO channels (id, channel_type, name) VALUES (?1, ?2, ?3)",
+            rusqlite::params![id, channel_type, name],
+        )?;
+        Ok(())
+    }
+
+    /// List all channels: (id, channel_type, name, enabled, safe_mode, created_at)
+    pub fn list_channels(&self) -> SqlResult<Vec<(String, String, String, bool, bool, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, channel_type, name, enabled, safe_mode, created_at FROM channels ORDER BY created_at",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get::<_, i32>(3)? != 0,
+                row.get::<_, i32>(4)? != 0,
+                row.get(5)?,
+            ))
+        })?;
+        rows.collect()
+    }
+
+    pub fn delete_channel(&self, id: &str) -> SqlResult<bool> {
+        let count = self.conn.execute(
+            "DELETE FROM channels WHERE id = ?1",
+            rusqlite::params![id],
+        )?;
+        Ok(count > 0)
+    }
+
+    pub fn set_channel_enabled(&self, id: &str, enabled: bool) -> SqlResult<()> {
+        self.conn.execute(
+            "UPDATE channels SET enabled = ?2 WHERE id = ?1",
+            rusqlite::params![id, enabled as i32],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_channel_setting(&self, channel_id: &str, key: &str, value: &str) -> SqlResult<()> {
+        self.conn.execute(
+            "INSERT INTO channel_settings (channel_id, key, value) VALUES (?1, ?2, ?3)
+             ON CONFLICT(channel_id, key) DO UPDATE SET value = excluded.value",
+            rusqlite::params![channel_id, key, value],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_channel_settings(&self, channel_id: &str) -> SqlResult<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT key, value FROM channel_settings WHERE channel_id = ?1 ORDER BY key",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![channel_id], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?;
+        rows.collect()
+    }
+
+    pub fn delete_channel_settings(&self, channel_id: &str) -> SqlResult<()> {
+        self.conn.execute(
+            "DELETE FROM channel_settings WHERE channel_id = ?1",
+            rusqlite::params![channel_id],
+        )?;
+        Ok(())
     }
 
     pub fn get_associations(&self, memory_id: &str) -> SqlResult<Vec<(String, String, String, f64)>> {

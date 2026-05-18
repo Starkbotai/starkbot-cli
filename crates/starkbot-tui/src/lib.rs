@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Tabs, Wrap};
 
 use starkbot_api::events::{BackendEvent, FrontendCommand};
-use starkbot_api::types::{AppSnapshot, SessionSummary, ChatSession, FlowSummary};
+use starkbot_api::types::{AppSnapshot, SessionSummary, ChatSession, FlowSummary, ChannelInfo, ChannelSettingInfo};
 use starkbot_core::persona::Persona;
 use starkbot_graph::{GraphData, GraphWidget, Viewport};
 use starkbot_skills::Skill;
@@ -27,12 +27,13 @@ pub enum ActiveView {
     Scheduling,
     ApiKeys,
     Packs,
+    Gateway,
     Settings,
 }
 
 impl ActiveView {
     pub fn titles() -> Vec<&'static str> {
-        vec!["Chat", "Skills", "Graph", "Personas", "Memory", "Data", "Scheduling", "API Keys", "Packs", "Settings"]
+        vec!["Chat", "Skills", "Graph", "Personas", "Memory", "Data", "Scheduling", "API Keys", "Packs", "Gateway", "Settings"]
     }
 
     pub fn index(&self) -> usize {
@@ -46,7 +47,8 @@ impl ActiveView {
             Self::Scheduling => 6,
             Self::ApiKeys => 7,
             Self::Packs => 8,
-            Self::Settings => 9,
+            Self::Gateway => 9,
+            Self::Settings => 10,
         }
     }
 
@@ -60,13 +62,14 @@ impl ActiveView {
             6 => Self::Scheduling,
             7 => Self::ApiKeys,
             8 => Self::Packs,
-            9 => Self::Settings,
+            9 => Self::Gateway,
+            10 => Self::Settings,
             _ => Self::Chat,
         }
     }
 
     pub fn next(&self) -> Self {
-        Self::from_index((self.index() + 1) % 10)
+        Self::from_index((self.index() + 1) % 11)
     }
 }
 
@@ -136,6 +139,13 @@ pub enum PacksFocus {
     Detail,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+pub enum GatewayFocus {
+    ChannelList,
+    Settings,
+    Actions,
+}
+
 /// TUI application state.
 pub struct TuiState {
     pub active_view: ActiveView,
@@ -192,6 +202,15 @@ pub struct TuiState {
     pub packs_loading: bool,
     pub packs_message: Option<String>,
     pub extension_server: String,
+    // Gateway state
+    pub channels: Vec<ChannelInfo>,
+    pub selected_channel: usize,
+    pub gateway_focus: GatewayFocus,
+    pub channel_settings: Vec<ChannelSettingInfo>,
+    pub selected_setting: usize,
+    pub gateway_create_mode: bool,
+    pub gateway_create_type: usize,
+    pub gateway_create_name: String,
 }
 
 impl TuiState {
@@ -249,6 +268,14 @@ impl TuiState {
             packs_loading: false,
             packs_message: None,
             extension_server: "https://hyperpacks.org".to_string(),
+            channels: vec![],
+            selected_channel: 0,
+            gateway_focus: GatewayFocus::ChannelList,
+            channel_settings: vec![],
+            selected_setting: 0,
+            gateway_create_mode: false,
+            gateway_create_type: 0,
+            gateway_create_name: String::new(),
         }
     }
 
@@ -352,6 +379,14 @@ impl TuiState {
             packs_loading: false,
             packs_message: None,
             extension_server: snapshot.extension_server.clone(),
+            channels: snapshot.channels.clone(),
+            selected_channel: 0,
+            gateway_focus: GatewayFocus::ChannelList,
+            channel_settings: vec![],
+            selected_setting: 0,
+            gateway_create_mode: false,
+            gateway_create_type: 0,
+            gateway_create_name: String::new(),
         }
     }
 
@@ -466,6 +501,24 @@ impl TuiState {
                 self.packs_loading = false;
                 self.packs_message = Some(format!("Error: {}", message));
             }
+            BackendEvent::ChannelsUpdated(channels) => {
+                self.channels = channels.clone();
+                if self.channels.is_empty() {
+                    self.selected_channel = 0;
+                } else if self.selected_channel >= self.channels.len() {
+                    self.selected_channel = self.channels.len() - 1;
+                }
+            }
+            BackendEvent::ChannelSettingsLoaded { settings, .. } => {
+                self.channel_settings = settings.clone();
+                self.selected_setting = 0;
+            }
+            BackendEvent::GatewayMessage { channel_name, user_name, text, .. } => {
+                self.add_message("tool", &format!("[gateway:{}] {}: {}", channel_name, user_name, truncate_str(text, 100)));
+            }
+            BackendEvent::GatewayResponse { .. } => {
+                // Response logged via agent turn
+            }
         }
     }
 
@@ -485,7 +538,12 @@ impl TuiState {
 }
 
 fn truncate_str(s: &str, max: usize) -> String {
-    if s.len() <= max { s.to_string() } else { format!("{}...", &s[..max]) }
+    let truncated: String = s.chars().take(max).collect();
+    if truncated.len() < s.len() {
+        format!("{}...", truncated)
+    } else {
+        truncated
+    }
 }
 
 /// Handle a key event. Returns Some(FrontendCommand) if input produces a command.
@@ -506,6 +564,7 @@ pub fn handle_key(state: &mut TuiState, key: KeyEvent) -> Option<FrontendCommand
         ActiveView::Scheduling => handle_scheduling_key(state, key),
         ActiveView::ApiKeys => handle_api_keys_key(state, key),
         ActiveView::Packs => handle_packs_key(state, key),
+        ActiveView::Gateway => handle_gateway_key(state, key),
         ActiveView::Settings => handle_settings_key(state, key),
     }
 }
@@ -900,6 +959,127 @@ fn filtered_packs(state: &TuiState) -> Vec<starkbot_api::types::PackInfo> {
         .collect()
 }
 
+fn handle_gateway_key(state: &mut TuiState, key: KeyEvent) -> Option<FrontendCommand> {
+    // Create mode
+    if state.gateway_create_mode {
+        match key.code {
+            KeyCode::Esc => {
+                state.gateway_create_mode = false;
+                state.gateway_create_name.clear();
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                state.gateway_create_type = state.gateway_create_type.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let types = starkbot_gateway::ChannelType::all();
+                state.gateway_create_type = (state.gateway_create_type + 1).min(types.len() - 1);
+            }
+            KeyCode::Enter => {
+                if state.gateway_create_name.is_empty() {
+                    // If name empty, use default based on type
+                    let types = starkbot_gateway::ChannelType::all();
+                    let ct = types[state.gateway_create_type];
+                    state.gateway_create_name = format!("My {} Channel", ct.display_name());
+                }
+                let types = starkbot_gateway::ChannelType::all();
+                let ct = types[state.gateway_create_type];
+                let name = state.gateway_create_name.clone();
+                state.gateway_create_mode = false;
+                state.gateway_create_name.clear();
+                return Some(FrontendCommand::ChannelCreate {
+                    channel_type: ct.as_str().to_string(),
+                    name,
+                });
+            }
+            KeyCode::Backspace => {
+                state.gateway_create_name.pop();
+            }
+            KeyCode::Char(c) => {
+                // If we've selected type already, add to name
+                state.gateway_create_name.push(c);
+            }
+            _ => {}
+        }
+        return None;
+    }
+
+    match key.code {
+        KeyCode::Tab => { state.active_view = state.active_view.next(); }
+        KeyCode::Char('h') | KeyCode::Left => {
+            state.gateway_focus = match state.gateway_focus {
+                GatewayFocus::Actions => GatewayFocus::Settings,
+                GatewayFocus::Settings => GatewayFocus::ChannelList,
+                GatewayFocus::ChannelList => GatewayFocus::ChannelList,
+            };
+        }
+        KeyCode::Char('l') | KeyCode::Right => {
+            state.gateway_focus = match state.gateway_focus {
+                GatewayFocus::ChannelList => GatewayFocus::Settings,
+                GatewayFocus::Settings => GatewayFocus::Actions,
+                GatewayFocus::Actions => GatewayFocus::Actions,
+            };
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            match state.gateway_focus {
+                GatewayFocus::ChannelList => {
+                    state.selected_channel = state.selected_channel.saturating_sub(1);
+                    if state.selected_channel < state.channels.len() {
+                        let id = state.channels[state.selected_channel].id.clone();
+                        return Some(FrontendCommand::ChannelSettingsLoad { channel_id: id });
+                    }
+                }
+                GatewayFocus::Settings => {
+                    state.selected_setting = state.selected_setting.saturating_sub(1);
+                }
+                GatewayFocus::Actions => {}
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            match state.gateway_focus {
+                GatewayFocus::ChannelList => {
+                    if !state.channels.is_empty() {
+                        state.selected_channel = (state.selected_channel + 1).min(state.channels.len() - 1);
+                        let id = state.channels[state.selected_channel].id.clone();
+                        return Some(FrontendCommand::ChannelSettingsLoad { channel_id: id });
+                    }
+                }
+                GatewayFocus::Settings => {
+                    if !state.channel_settings.is_empty() {
+                        state.selected_setting = (state.selected_setting + 1).min(state.channel_settings.len() - 1);
+                    }
+                }
+                GatewayFocus::Actions => {}
+            }
+        }
+        KeyCode::Char('n') => {
+            state.gateway_create_mode = true;
+            state.gateway_create_type = 0;
+            state.gateway_create_name.clear();
+        }
+        KeyCode::Char('d') => {
+            if state.gateway_focus == GatewayFocus::ChannelList && state.selected_channel < state.channels.len() {
+                let id = state.channels[state.selected_channel].id.clone();
+                state.channel_settings.clear();
+                return Some(FrontendCommand::ChannelDelete { channel_id: id });
+            }
+        }
+        KeyCode::Enter => {
+            if state.gateway_focus == GatewayFocus::ChannelList || state.gateway_focus == GatewayFocus::Actions {
+                if state.selected_channel < state.channels.len() {
+                    let ch = &state.channels[state.selected_channel];
+                    if ch.running {
+                        return Some(FrontendCommand::ChannelStop { channel_id: ch.id.clone() });
+                    } else {
+                        return Some(FrontendCommand::ChannelStart { channel_id: ch.id.clone() });
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    None
+}
+
 fn handle_settings_key(state: &mut TuiState, key: KeyEvent) -> Option<FrontendCommand> {
     match key.code {
         KeyCode::Tab => state.active_view = state.active_view.next(),
@@ -984,6 +1164,7 @@ pub fn draw(frame: &mut ratatui::Frame, state: &TuiState) {
         ActiveView::Scheduling => draw_scheduling(frame, state, chunks[1]),
         ActiveView::ApiKeys => draw_api_keys(frame, state, chunks[1]),
         ActiveView::Packs => draw_packs(frame, state, chunks[1]),
+        ActiveView::Gateway => draw_gateway(frame, state, chunks[1]),
         ActiveView::Settings => draw_settings(frame, state, chunks[1]),
     }
 
@@ -1760,6 +1941,162 @@ fn draw_packs(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
         .wrap(Wrap { trim: false })
         .block(detail_block);
     frame.render_widget(detail, chunks[1]);
+}
+
+fn draw_gateway(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {
+    // Create mode overlay
+    if state.gateway_create_mode {
+        let types = starkbot_gateway::ChannelType::all();
+        let mut lines = vec![
+            Line::from(Span::styled("Create Channel", Style::default().fg(Color::Cyan).bold())),
+            Line::from(""),
+            Line::from(Span::styled("Select type (j/k):", Style::default().fg(Color::White))),
+        ];
+        for (i, ct) in types.iter().enumerate() {
+            let marker = if i == state.gateway_create_type { "▸ " } else { "  " };
+            let style = if i == state.gateway_create_type {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            lines.push(Line::from(Span::styled(format!("{}{}", marker, ct.display_name()), style)));
+        }
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("Name: ", Style::default().fg(Color::White)),
+            Span::styled(
+                if state.gateway_create_name.is_empty() { "(press Enter for default)" } else { &state.gateway_create_name },
+                Style::default().fg(Color::Yellow),
+            ),
+        ]));
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled("[Enter] Create  [Esc] Cancel", Style::default().fg(Color::DarkGray))));
+
+        let block = Block::default().borders(Borders::ALL).title("New Channel");
+        let p = Paragraph::new(lines).block(block);
+        frame.render_widget(p, area);
+        return;
+    }
+
+    // 3-pane layout
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(30),
+            Constraint::Percentage(35),
+            Constraint::Percentage(35),
+        ])
+        .split(area);
+
+    // Left pane: channel list
+    {
+        let hl = if state.gateway_focus == GatewayFocus::ChannelList { Color::Cyan } else { Color::DarkGray };
+        let block = Block::default().borders(Borders::ALL).title("Channels")
+            .border_style(Style::default().fg(hl));
+        let inner = block.inner(cols[0]);
+        frame.render_widget(block, cols[0]);
+
+        if state.channels.is_empty() {
+            let p = Paragraph::new(vec![
+                Line::from(""),
+                Line::from(Span::styled("  No channels yet", Style::default().fg(Color::DarkGray))),
+                Line::from(""),
+                Line::from(Span::styled("  [n] New channel", Style::default().fg(Color::DarkGray))),
+            ]);
+            frame.render_widget(p, inner);
+        } else {
+            let lines: Vec<Line> = state.channels.iter().enumerate().map(|(i, ch)| {
+                let marker = if i == state.selected_channel { "▸ " } else { "  " };
+                let status_icon = if ch.running { "●" } else { "○" };
+                let status_color = if ch.running { Color::Green } else { Color::DarkGray };
+                let name_style = if i == state.selected_channel {
+                    Style::default().fg(Color::White)
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+                Line::from(vec![
+                    Span::styled(marker, name_style),
+                    Span::styled(format!("{} ", status_icon), Style::default().fg(status_color)),
+                    Span::styled(&ch.name, name_style),
+                ])
+            }).collect();
+            let p = Paragraph::new(lines);
+            frame.render_widget(p, inner);
+        }
+    }
+
+    // Middle pane: settings
+    {
+        let hl = if state.gateway_focus == GatewayFocus::Settings { Color::Cyan } else { Color::DarkGray };
+        let block = Block::default().borders(Borders::ALL).title("Settings")
+            .border_style(Style::default().fg(hl));
+        let inner = block.inner(cols[1]);
+        frame.render_widget(block, cols[1]);
+
+        if state.channel_settings.is_empty() {
+            let p = Paragraph::new(Span::styled("  Select a channel", Style::default().fg(Color::DarkGray)));
+            frame.render_widget(p, inner);
+        } else {
+            let lines: Vec<Line> = state.channel_settings.iter().enumerate().map(|(i, s)| {
+                let marker = if state.gateway_focus == GatewayFocus::Settings && i == state.selected_setting { "▸ " } else { "  " };
+                let display_val = if s.input_type == "password" && !s.value.is_empty() {
+                    "****".to_string()
+                } else {
+                    s.value.clone()
+                };
+                Line::from(vec![
+                    Span::styled(marker, Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!("{}: ", s.label), Style::default().fg(Color::White)),
+                    Span::styled(if display_val.is_empty() { "(not set)".to_string() } else { display_val }, Style::default().fg(Color::Yellow)),
+                ])
+            }).collect();
+            let p = Paragraph::new(lines);
+            frame.render_widget(p, inner);
+        }
+    }
+
+    // Right pane: info / actions
+    {
+        let hl = if state.gateway_focus == GatewayFocus::Actions { Color::Cyan } else { Color::DarkGray };
+        let block = Block::default().borders(Borders::ALL).title("Info")
+            .border_style(Style::default().fg(hl));
+        let inner = block.inner(cols[2]);
+        frame.render_widget(block, cols[2]);
+
+        if state.selected_channel < state.channels.len() {
+            let ch = &state.channels[state.selected_channel];
+            let status = if ch.running { "Running" } else { "Stopped" };
+            let status_color = if ch.running { Color::Green } else { Color::DarkGray };
+            let action = if ch.running { "[Enter] Stop" } else { "[Enter] Start" };
+            let lines = vec![
+                Line::from(vec![
+                    Span::styled("  Type: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(&ch.channel_type, Style::default().fg(Color::White)),
+                ]),
+                Line::from(vec![
+                    Span::styled("  Status: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(status, Style::default().fg(status_color)),
+                ]),
+                Line::from(vec![
+                    Span::styled("  Safe Mode: ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(if ch.safe_mode { "ON" } else { "OFF" }, Style::default().fg(Color::Yellow)),
+                ]),
+                Line::from(""),
+                Line::from(Span::styled(format!("  {}", action), Style::default().fg(Color::Cyan))),
+                Line::from(Span::styled("  [d] Delete", Style::default().fg(Color::Red))),
+                Line::from(Span::styled("  [n] New channel", Style::default().fg(Color::DarkGray))),
+            ];
+            let p = Paragraph::new(lines);
+            frame.render_widget(p, inner);
+        } else {
+            let lines = vec![
+                Line::from(""),
+                Line::from(Span::styled("  [n] New channel", Style::default().fg(Color::DarkGray))),
+            ];
+            let p = Paragraph::new(lines);
+            frame.render_widget(p, inner);
+        }
+    }
 }
 
 fn draw_settings(frame: &mut ratatui::Frame, state: &TuiState, area: Rect) {

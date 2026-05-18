@@ -11,6 +11,7 @@ starkbot-memory = { path = "../starkbot-memory" }
 starkbot-db = { path = "../starkbot-db" }
 starkbot-config = { path = "../starkbot-config" }
 starkbot-graph = { path = "../starkbot-graph", default-features = false }
+starkbot-gateway = { path = "../starkbot-gateway" }
 metalcraft = { workspace = true }
 rig = { workspace = true }
 tokio = { workspace = true }
