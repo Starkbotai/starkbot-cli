@@ -1,18 +1,18 @@
-# StarkBot CLI
+# StarkBot Native
 
-A terminal-native AI agent platform built in Rust. Think [stark-bot](https://github.com/anthropics/stark-bot) but running locally in your terminal instead of the cloud.
+A desktop-native AI agent platform built in Rust.  
 
 ```
 ╭─────────────────────────────────────────────╮
-│  StarkBot CLI                                │
-│  Persona: Coding Agent                       │
-│  Model:   gpt-4o                             │
+│  StarkBot Native                            │
+│  Persona: Coding Agent                      │
+│  Model:   gpt-5.5                           │
 ╰─────────────────────────────────────────────╯
 ```
 
 ## Architecture
 
-StarkBot CLI is built on three core pillars:
+StarkBot is built on three core pillars:
 
 - **[metalcraft](https://crates.io/crates/metalcraft)** — LangGraph-style stateful graph engine for Rust. Handles the ReAct agent loop, tool calling, approval hooks, checkpointing, and step guards.
 - **[rig](https://crates.io/crates/rig)** — Provider-agnostic LLM access. Currently wired to OpenAI; designed for multi-provider support.
