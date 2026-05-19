@@ -1,0 +1,35 @@
+{
+  "id": "template-linear-task-worker",
+  "name": "Linear Task Worker",
+  "created_at": "2026-05-19T00:00:00Z",
+  "updated_at": "2026-05-19T00:00:00Z",
+  "enabled": false,
+  "flow": {
+    "nodes": [
+      {
+        "id": "entry",
+        "node_type": "entry",
+        "data": {
+          "schedule_type": "minutes",
+          "interval": 30
+        },
+        "position": [0.0, 0.0]
+      },
+      {
+        "id": "task-worker",
+        "node_type": "prompt",
+        "data": {
+          "prompt": "You are a Linear task worker. Your job is to pick up the next unstarted issue from Linear and attempt to complete it.\n\nFollow these steps carefully. After EVERY web_fetch call, inspect the response and log what you received before continuing.\n\n## Step 1: Load the Linear skill\nCall `load_skill(\"linear-manage\")` to get the full GraphQL API reference.\n\n## Step 2: List teams\nQuery all teams:\n```graphql\nquery { teams { nodes { id name key } } }\n```\nPick the first team. Log the team name and ID.\n\n## Step 3: Discover workflow states\nQuery workflow states (note: use `ID!` not `String!` for teamId):\n```graphql\nquery workflowStates($teamId: ID!) {\n  workflowStates(filter: {team: {id: {eq: $teamId}}}) {\n    nodes { id name type }\n  }\n}\n```\nLog ALL returned states. Linear state types are:\n- `backlog` — Backlog items\n- `unstarted` — Todo items\n- `started` — In Progress\n- `completed` — Done\n- `canceled` — Won't Do\n\nCollect ALL state IDs where type is `backlog` OR `unstarted` — these are your candidate pickup states.\nIdentify the `started` state ID (for claiming) and `completed` state ID (for closing).\n\n## Step 4: Find the next issue to pick up\nQuery issues in BOTH backlog and unstarted states. Use the `in` operator to match multiple state types:\n```graphql\nquery issues($filter: IssueFilter, $first: Int) {\n  issues(filter: $filter, first: $first) {\n    nodes {\n      id identifier title description state { id name type } priority\n      labels { nodes { name } }\n    }\n  }\n}\n```\nFilter: `{\"state\": {\"type\": {\"in\": [\"unstarted\", \"backlog\"]}}, \"team\": {\"id\": {\"eq\": \"<teamId>\"}}}` with `first: 1`.\n\nDo NOT use `orderBy: priority` — it is not supported. The default ordering is fine.\n\nLog the full response.\n\n## Step 5: If no issues found\nIf the query returns zero issues, respond with:\n\"No unstarted issues found in [team name]. Checked state types: backlog, unstarted. Backlog is clear.\"\nThen stop.\n\n## Step 6: Claim the issue\nLog the issue identifier, title, and description. Then:\n- Update issue state to the `started` state ID using `issueUpdate` (use `ID!` for the id parameter)\n- Add comment: \"Starkbot picking up this issue\"\n\n## Step 7: Attempt to complete the task\nRead the issue title and description carefully. Use your available tools to attempt to complete the task described in the issue. This may involve:\n- Reading and editing code files\n- Running commands\n- Searching the codebase\n- Any other tools at your disposal\n\nDo your best to fulfill what the issue asks for.\n\n## Step 8: Report results\n**On success:**\n- Move the issue to the `completed` (Done) state\n- Add a comment summarizing what was done\n\n**On failure or partial completion:**\n- Move the issue back to its original state\n- Add a comment explaining what was attempted and what went wrong"
+        },
+        "position": [250.0, 0.0]
+      }
+    ],
+    "edges": [
+      {
+        "id": "edge-entry-to-worker",
+        "source": "entry",
+        "target": "task-worker"
+      }
+    ]
+  }
+}

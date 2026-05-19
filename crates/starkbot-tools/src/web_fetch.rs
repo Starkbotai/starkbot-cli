@@ -44,7 +44,11 @@ impl WebFetchTool {
                 // Format: "header:KEY_NAME" sets X-API-Key style header
                 Ok(("X-API-Key".to_string(), value.to_string()))
             }
-            other => Err(format!("Unknown auth scheme '{}'. Use bearer, basic, token, or header.", other)),
+            "raw" => {
+                // Format: "raw:KEY_NAME" sets Authorization header with just the key value (no prefix)
+                Ok(("Authorization".to_string(), value.to_string()))
+            }
+            other => Err(format!("Unknown auth scheme '{}'. Use bearer, basic, token, raw, or header.", other)),
         }
     }
 }
@@ -62,7 +66,7 @@ impl metalcraft::Tool for WebFetchTool {
                 "url": { "type": "string", "description": "The URL to fetch" },
                 "method": { "type": "string", "description": "HTTP method: GET, POST, PUT, DELETE, PATCH (default: GET)", "enum": ["GET", "POST", "PUT", "DELETE", "PATCH"] },
                 "headers": { "type": "string", "description": "Custom headers as a JSON string of key-value pairs" },
-                "auth": { "type": "string", "description": "Auth spec that resolves a key from the keystore. Format: 'scheme:KEY_NAME'. Schemes: bearer, basic, token, header. Example: 'bearer:CLOUDFLARE_API_TOKEN'" },
+                "auth": { "type": "string", "description": "Auth spec that resolves a key from the keystore. Format: 'scheme:KEY_NAME'. Schemes: bearer, basic, token, raw, header. Example: 'bearer:CLOUDFLARE_API_TOKEN' or 'raw:LINEAR_API_KEY'" },
                 "body": { "type": "string", "description": "Request body for POST/PUT/PATCH requests" },
                 "timeout_secs": { "type": "integer", "description": "Maximum time in seconds (default 30)" }
             },

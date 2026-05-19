@@ -25,11 +25,13 @@ All requests go to `https://api.linear.app/graphql`
 
 Use `web_fetch` with:
 - `method: "POST"`
-- `auth: "bearer:LINEAR_API_KEY"` — this resolves the token from the keystore automatically
+- `auth: "raw:LINEAR_API_KEY"` — this resolves the key from the keystore and sends it as-is in the Authorization header
 - `headers: {"Content-Type": "application/json"}`
 - `body` containing `{"query": "...", "variables": {...}}`
 
 **IMPORTANT**: Never manually construct Authorization headers. Always use the `auth` parameter.
+
+**IMPORTANT**: Linear uses `ID!` (not `String!`) for all entity ID parameters (teamId, issueId, etc.).
 
 ---
 
@@ -46,6 +48,26 @@ query {
 
 ---
 
+## Workflow States
+
+Linear has these state types: `backlog`, `unstarted`, `started`, `completed`, `canceled`.
+- **backlog**: Backlog items (low priority, not yet triaged)
+- **unstarted**: Todo items (triaged but not started)
+- **started**: In Progress
+- **completed**: Done
+- **canceled**: Canceled/Won't Do
+
+### List Workflow States
+```graphql
+query workflowStates($teamId: ID!) {
+  workflowStates(filter: {team: {id: {eq: $teamId}}}) {
+    nodes { id name type }
+  }
+}
+```
+
+---
+
 ## Issues
 
 ### List Issues
@@ -53,21 +75,25 @@ query {
 query issues($filter: IssueFilter, $first: Int) {
   issues(filter: $filter, first: $first) {
     nodes {
-      id identifier title state { name } priority assignee { name } createdAt
+      id identifier title state { id name type } priority assignee { name } createdAt
     }
   }
 }
 ```
 Filter examples:
 - By team: `{"team": {"key": {"eq": "ENG"}}}`
-- By state: `{"state": {"name": {"eq": "In Progress"}}}`
+- By state name: `{"state": {"name": {"eq": "In Progress"}}}`
+- By state type: `{"state": {"type": {"in": ["backlog", "unstarted"]}}}`
+- By state ID: `{"state": {"id": {"eq": "<stateId>"}}}`
 - By assignee: `{"assignee": {"email": {"eq": "user@example.com"}}}`
+
+Note: `orderBy` only accepts `createdAt` or `updatedAt`, NOT `priority`.
 
 ### Get Issue
 ```graphql
-query issue($id: String!) {
+query issue($id: ID!) {
   issue(id: $id) {
-    id identifier title description state { name }
+    id identifier title description state { id name type }
     priority assignee { name } project { name }
     labels { nodes { name } }
     comments { nodes { body user { name } createdAt } }
@@ -90,7 +116,7 @@ Priority values: 0 = No priority, 1 = Urgent, 2 = High, 3 = Medium, 4 = Low
 
 ### Update Issue
 ```graphql
-mutation issueUpdate($id: String!, $input: IssueUpdateInput!) {
+mutation issueUpdate($id: ID!, $input: IssueUpdateInput!) {
   issueUpdate(id: $id, input: $input) {
     success
     issue { id identifier title state { name } }
@@ -100,15 +126,7 @@ mutation issueUpdate($id: String!, $input: IssueUpdateInput!) {
 Variables: `{"id": "...", "input": {"stateId": "...", "assigneeId": "...", "priority": 1}}`
 
 ### Close Issue
-To close an issue, update its state to a "Done" or "Canceled" state. First query the team's workflow states:
-```graphql
-query workflowStates($teamId: String!) {
-  workflowStates(filter: {team: {id: {eq: $teamId}}}) {
-    nodes { id name type }
-  }
-}
-```
-Then update the issue with the completed state ID.
+To close an issue, update its state to a "Done" or "Canceled" state. First query the team's workflow states to find the state ID where type is `completed` or `canceled`, then use `issueUpdate`.
 
 ### Add Comment
 ```graphql
@@ -161,7 +179,7 @@ Variables: `{"input": {"name": "Project Name", "teamIds": ["..."], "description"
 
 ### List Active Cycle
 ```graphql
-query activeCycle($teamId: String!) {
+query activeCycle($teamId: ID!) {
   team(id: $teamId) {
     activeCycle {
       id name startsAt endsAt
@@ -173,7 +191,7 @@ query activeCycle($teamId: String!) {
 
 ### List Cycles
 ```graphql
-query cycles($teamId: String!) {
+query cycles($teamId: ID!) {
   team(id: $teamId) {
     cycles {
       nodes { id name startsAt endsAt completedAt }

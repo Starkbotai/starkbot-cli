@@ -57,6 +57,7 @@ function OpenFolderButton({ view, snapshot }: { view: View; snapshot: any }) {
 
 export default function App() {
   const [activeView, setActiveView] = useState<View>("chat");
+  const [dataInitialTab, setDataInitialTab] = useState<"sessions" | "flow-logs" | "events" | "custom" | undefined>(undefined);
   const [showDebug, setShowDebug] = useState(false);
   const debugEndRef = useRef<HTMLDivElement>(null);
   const backend = useBackend();
@@ -74,7 +75,7 @@ export default function App() {
         {TABS.map((tab) => (
           <button
             key={tab.id}
-            onClick={() => setActiveView(tab.id)}
+            onClick={() => { setDataInitialTab(undefined); setActiveView(tab.id); }}
             className={`px-3 py-1 text-sm rounded transition-colors ${
               activeView === tab.id
                 ? "bg-accent text-white"
@@ -122,6 +123,7 @@ export default function App() {
             onListCustomFiles={backend.listCustomFiles}
             onReadCustomFile={backend.readCustomFile}
             onWriteCustomFile={backend.writeCustomFile}
+            initialTab={dataInitialTab}
           />
         )}
         {activeView === "flows" && (
@@ -233,7 +235,7 @@ export default function App() {
           <>
             <span className="text-gray-600">|</span>
             <button
-              onClick={() => setActiveView("data")}
+              onClick={() => { setDataInitialTab("flow-logs"); setActiveView("data"); }}
               className="text-yellow-400 hover:text-yellow-300 transition-colors"
             >
               ⟳ {backend.runningFlows} flow{backend.runningFlows !== 1 ? "s" : ""} running

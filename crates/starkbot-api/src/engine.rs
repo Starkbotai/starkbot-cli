@@ -575,10 +575,27 @@ impl crate::backend::Backend for StarkbotEngine {
                                 let mut all_succeeded = true;
                                 let mut last_error: Option<String> = None;
 
-                                for prompt_text in &prompts {
+                                let prompt_count = prompts.len();
+                                for (prompt_idx, prompt_text) in prompts.iter().enumerate() {
+                                    let node_label = if prompt_count == 1 {
+                                        "node 1/1".to_string()
+                                    } else {
+                                        format!("node {}/{}", prompt_idx + 1, prompt_count)
+                                    };
+
+                                    schedules::append_flow_log(&flow_app_config.flow_logs_path(), &FlowLogEntry {
+                                        timestamp: chrono::Local::now().to_rfc3339(),
+                                        flow_id: flow_id_clone.clone(),
+                                        flow_name: flow_name.clone(),
+                                        action: "node_start".to_string(),
+                                        detail: node_label.clone(),
+                                        run_id: Some(flow_run_id.clone()),
+                                    });
+
                                     session_messages.push(ChatSessionMessage {
                                         role: "user".to_string(),
                                         content: prompt_text.clone(),
+                                        timestamp: Some(chrono::Local::now().to_rfc3339()),
                                     });
 
                                     let autonomous_prompt = format!(
@@ -627,8 +644,33 @@ impl crate::backend::Backend for StarkbotEngine {
                                         }
                                     });
 
+                                    let fwd_log_path = flow_app_config.flow_logs_path();
+                                    let fwd_flow_id = flow_id_clone.clone();
+                                    let fwd_flow_name = flow_name.clone();
+                                    let fwd_run_id = flow_run_id.clone();
                                     let fwd_handle = tokio::spawn(async move {
-                                        while arx.recv().await.is_some() {}
+                                        while let Some(evt) = arx.recv().await {
+                                            let (action, detail) = match &evt {
+                                                BackendEvent::ToolCall { name, args } => {
+                                                    let preview = if args.len() > 200 { format!("{}...", &args[..200]) } else { args.clone() };
+                                                    ("tool_call".to_string(), format!("{} {}", name, preview))
+                                                }
+                                                BackendEvent::ToolResult { name, success, preview } => {
+                                                    let status = if *success { "ok" } else { "ERR" };
+                                                    let short = if preview.len() > 200 { format!("{}...", &preview[..200]) } else { preview.clone() };
+                                                    ("tool_result".to_string(), format!("[{}] {} {}", status, name, short))
+                                                }
+                                                _ => continue,
+                                            };
+                                            schedules::append_flow_log(&fwd_log_path, &FlowLogEntry {
+                                                timestamp: chrono::Local::now().to_rfc3339(),
+                                                flow_id: fwd_flow_id.clone(),
+                                                flow_name: fwd_flow_name.clone(),
+                                                action,
+                                                detail,
+                                                run_id: Some(fwd_run_id.clone()),
+                                            });
+                                        }
                                     });
 
                                     match result_rx.await {
@@ -637,12 +679,30 @@ impl crate::backend::Backend for StarkbotEngine {
                                             session_messages.push(ChatSessionMessage {
                                                 role: "assistant".to_string(),
                                                 content: answer,
+                                                timestamp: Some(chrono::Local::now().to_rfc3339()),
+                                            });
+                                            schedules::append_flow_log(&flow_app_config.flow_logs_path(), &FlowLogEntry {
+                                                timestamp: chrono::Local::now().to_rfc3339(),
+                                                flow_id: flow_id_clone.clone(),
+                                                flow_name: flow_name.clone(),
+                                                action: "node_complete".to_string(),
+                                                detail: format!("{} completed", node_label),
+                                                run_id: Some(flow_run_id.clone()),
                                             });
                                         }
                                         Ok(Err(err)) => {
                                             session_messages.push(ChatSessionMessage {
                                                 role: "error".to_string(),
                                                 content: err.clone(),
+                                                timestamp: Some(chrono::Local::now().to_rfc3339()),
+                                            });
+                                            schedules::append_flow_log(&flow_app_config.flow_logs_path(), &FlowLogEntry {
+                                                timestamp: chrono::Local::now().to_rfc3339(),
+                                                flow_id: flow_id_clone.clone(),
+                                                flow_name: flow_name.clone(),
+                                                action: "node_error".to_string(),
+                                                detail: format!("{} error: {}", node_label, err),
+                                                run_id: Some(flow_run_id.clone()),
                                             });
                                             last_error = Some(err);
                                             all_succeeded = false;
@@ -653,6 +713,15 @@ impl crate::backend::Backend for StarkbotEngine {
                                             session_messages.push(ChatSessionMessage {
                                                 role: "error".to_string(),
                                                 content: msg.clone(),
+                                                timestamp: Some(chrono::Local::now().to_rfc3339()),
+                                            });
+                                            schedules::append_flow_log(&flow_app_config.flow_logs_path(), &FlowLogEntry {
+                                                timestamp: chrono::Local::now().to_rfc3339(),
+                                                flow_id: flow_id_clone.clone(),
+                                                flow_name: flow_name.clone(),
+                                                action: "node_error".to_string(),
+                                                detail: format!("{} error: {}", node_label, msg),
+                                                run_id: Some(flow_run_id.clone()),
                                             });
                                             last_error = Some(msg);
                                             all_succeeded = false;
@@ -1587,6 +1656,7 @@ impl crate::backend::Backend for StarkbotEngine {
                                             .map(|m| starkbot_config::sessions::ChatSessionMessage {
                                                 role: m.role.clone(),
                                                 content: m.content.clone(),
+                                                timestamp: None,
                                             })
                                             .collect();
                                         let session = starkbot_config::sessions::ChatSession {

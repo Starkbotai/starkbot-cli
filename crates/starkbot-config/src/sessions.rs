@@ -19,6 +19,8 @@ pub struct ChatSession {
 pub struct ChatSessionMessage {
     pub role: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

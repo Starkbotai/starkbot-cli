@@ -185,9 +185,9 @@ pub struct FlowLogEntry {
 pub fn append_flow_log(log_path: &Path, entry: &FlowLogEntry) {
     let mut entries = load_flow_logs(log_path);
     entries.push(entry.clone());
-    // Keep last 500 entries
-    if entries.len() > 500 {
-        entries = entries.split_off(entries.len() - 500);
+    // Keep last 2000 entries
+    if entries.len() > 2000 {
+        entries = entries.split_off(entries.len() - 2000);
     }
     if let Ok(json) = serde_json::to_string_pretty(&entries) {
         let _ = std::fs::write(log_path, json);

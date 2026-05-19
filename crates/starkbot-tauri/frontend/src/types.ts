@@ -48,6 +48,7 @@ export interface GraphEdgeDto {
 export interface ChatSessionMessage {
   role: string;
   content: string;
+  timestamp?: string;
 }
 
 export interface ChatSession {

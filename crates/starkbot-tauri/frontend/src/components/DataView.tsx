@@ -3,6 +3,17 @@ import type { SessionSummary, ChatSession, FlowLogEntry, CustomFileEntry, Intern
 
 type DataTab = "sessions" | "flow-logs" | "events" | "custom";
 
+function formatDateTime(iso: string): string {
+  try {
+    const d = new Date(iso);
+    const date = d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+    const time = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+    return `${date} ${time}`;
+  } catch {
+    return iso.slice(0, 16).replace("T", " ");
+  }
+}
+
 interface Props {
   sessions: SessionSummary[];
   viewingSession: ChatSession | null;
@@ -16,6 +27,7 @@ interface Props {
   onListCustomFiles: () => Promise<CustomFileEntry[]>;
   onReadCustomFile: (path: string) => Promise<string>;
   onWriteCustomFile: (path: string, content: string) => Promise<void>;
+  initialTab?: DataTab;
 }
 
 export default function DataView({
@@ -31,9 +43,15 @@ export default function DataView({
   onListCustomFiles,
   onReadCustomFile,
   onWriteCustomFile,
+  initialTab,
 }: Props) {
   const [selectedIdx, setSelectedIdx] = useState(0);
-  const [tab, setTab] = useState<DataTab>("sessions");
+  const [tab, setTab] = useState<DataTab>(initialTab ?? "sessions");
+
+  // Sync tab when initialTab prop changes (e.g. footer click while already on data view)
+  useEffect(() => {
+    if (initialTab) setTab(initialTab);
+  }, [initialTab]);
 
   useEffect(() => {
     if (tab === "flow-logs") {
@@ -42,6 +60,13 @@ export default function DataView({
       onLoadEventsLog();
     }
   }, [tab]);
+
+  // Auto-refresh flow logs every 2s while on the flow-logs tab
+  useEffect(() => {
+    if (tab !== "flow-logs") return;
+    const id = setInterval(() => onLoadFlowLogs(), 2000);
+    return () => clearInterval(id);
+  }, [tab, onLoadFlowLogs]);
 
   return (
     <div className="flex h-full">
@@ -108,7 +133,7 @@ export default function DataView({
                     <span>|</span>
                     <span>{s.message_count} msgs</span>
                     <span>|</span>
-                    <span>{s.created_at.slice(0, 10)}</span>
+                    <span>{formatDateTime(s.created_at)}</span>
                   </div>
                 </div>
               ))
@@ -121,7 +146,7 @@ export default function DataView({
               <div>
                 <h2 className="text-lg font-semibold text-gray-200 mb-1">{viewingSession.title}</h2>
                 <p className="text-xs text-gray-500 mb-3">
-                  {viewingSession.persona} | {viewingSession.created_at.slice(0, 10)} | {viewingSession.messages.length} messages
+                  {viewingSession.persona} | {formatDateTime(viewingSession.created_at)} | {viewingSession.messages.length} messages
                 </p>
                 <div className="flex gap-2 mb-4">
                   <button
@@ -143,6 +168,11 @@ export default function DataView({
                       <span className="font-bold text-xs mr-2">
                         {msg.role === "user" ? "[you]" : "[agent]"}
                       </span>
+                      {msg.timestamp && (
+                        <span className="text-[10px] text-gray-600 font-mono mr-2">
+                          {msg.timestamp.slice(11, 19)}
+                        </span>
+                      )}
                       <span className="whitespace-pre-wrap">{msg.content}</span>
                     </div>
                   ))}
@@ -373,6 +403,8 @@ function CustomFilesPanel({
 
 // --- Grouped Flow Logs ---
 
+type RunStatus = "success" | "error" | "in_progress";
+
 type RunGroup = {
   run_id: string;
   flow_name: string;
@@ -380,6 +412,7 @@ type RunGroup = {
   startTime: string;
   endTime: string;
   success: boolean;
+  status: RunStatus;
 };
 
 type LogItem = { type: "run"; group: RunGroup } | { type: "admin"; entry: FlowLogEntry };
@@ -414,11 +447,14 @@ function FlowLogsPanel({ flowLogs, onLoadFlowLogs }: { flowLogs: FlowLogEntry[];
       const endTime = entries[entries.length - 1].timestamp;
       const executedEntry = entries.find(e => e.action === "executed");
       const success = executedEntry ? executedEntry.detail.includes("successfully") : false;
+      const status: RunStatus = executedEntry
+        ? (success ? "success" : "error")
+        : "in_progress";
       runGroups.push({
         idx: runFirstSeen.get(run_id)!,
         item: {
           type: "run",
-          group: { run_id, flow_name: entries[0].flow_name, entries, startTime, endTime, success },
+          group: { run_id, flow_name: entries[0].flow_name, entries, startTime, endTime, success, status },
         },
       });
     }
@@ -497,9 +533,11 @@ function FlowLogsPanel({ flowLogs, onLoadFlowLogs }: { flowLogs: FlowLogEntry[];
                     {group.startTime.slice(0, 19).replace("T", " ")}
                   </span>
                   <span className={`px-1.5 py-0.5 text-[10px] rounded font-medium ${
-                    group.success ? "bg-green-900/40 text-green-400" : "bg-red-900/40 text-red-400"
+                    group.status === "success" ? "bg-green-900/40 text-green-400" :
+                    group.status === "in_progress" ? "bg-amber-900/40 text-amber-400" :
+                    "bg-red-900/40 text-red-400"
                   }`}>
-                    {group.success ? "success" : "error"}
+                    {group.status === "success" ? "success" : group.status === "in_progress" ? "in progress" : "error"}
                   </span>
                   <span className="text-gray-200 truncate font-medium">{group.flow_name}</span>
                   {duration && <span className="text-gray-500 text-xs">{duration}</span>}
@@ -507,15 +545,26 @@ function FlowLogsPanel({ flowLogs, onLoadFlowLogs }: { flowLogs: FlowLogEntry[];
                 </button>
                 {expanded && (
                   <div className="border-t border-surface-3 px-3 py-2 space-y-1">
-                    {group.entries.map((entry, j) => (
-                      <div key={j} className="flex items-start gap-2 text-xs text-gray-400">
-                        <span className="text-[10px] text-gray-600 font-mono whitespace-nowrap">
-                          {entry.timestamp.slice(11, 19)}
-                        </span>
-                        <span className="text-blue-400">{entry.action}</span>
-                        {entry.detail && <span className={`${entry.detail.startsWith("error:") ? "text-red-400" : "text-gray-500"} break-all`}>{entry.detail}</span>}
-                      </div>
-                    ))}
+                    {group.entries.map((entry, j) => {
+                      const actionColor =
+                        entry.action === "tool_call" ? "text-cyan-400" :
+                        entry.action === "tool_result" ? (entry.detail.startsWith("[ERR]") ? "text-red-400" : "text-green-400") :
+                        entry.action === "node_start" ? "text-amber-400" :
+                        entry.action === "node_complete" ? "text-green-400" :
+                        entry.action === "node_error" ? "text-red-400" :
+                        "text-blue-400";
+                      const detailColor =
+                        entry.detail.startsWith("error:") || entry.detail.startsWith("[ERR]") ? "text-red-400" : "text-gray-500";
+                      return (
+                        <div key={j} className="flex items-start gap-2 text-xs text-gray-400">
+                          <span className="text-[10px] text-gray-600 font-mono whitespace-nowrap">
+                            {entry.timestamp.slice(11, 19)}
+                          </span>
+                          <span className={`${actionColor} whitespace-nowrap`}>{entry.action}</span>
+                          {entry.detail && <span className={`${detailColor} break-all`}>{entry.detail}</span>}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
